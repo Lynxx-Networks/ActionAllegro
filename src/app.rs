@@ -1,9 +1,16 @@
+use crate::helpers::get_actions;
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
+
 pub struct TemplateApp {
     // Example stuff:
     label: String,
+    label2: String,
+    actions: Vec<String>, // Store the names of GitHub Actions here
+    display_actions: bool, // Flag to indicate whether to display actions
+    error_message: Option<String>,
 
     #[serde(skip)] // This how you opt-out of serialization of a field
     value: f32,
@@ -13,8 +20,12 @@ impl Default for TemplateApp {
     fn default() -> Self {
         Self {
             // Example stuff:
-            label: "Hello World!".to_owned(),
+            label: "myuser/myrepo".to_owned(),
+            label2: "ghp_sdfjkh238hdsklsdjf983nldfejfds".to_owned(),
             value: 2.7,
+            actions: Vec::new(), // Store the names of GitHub Actions here
+            display_actions: false, // Flag to indicate whether to display actions
+            error_message: None,
         }
     }
 }
@@ -66,24 +77,61 @@ impl eframe::App for TemplateApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             // The central panel the region left after adding TopPanel's and SidePanel's
-            ui.heading("eframe template");
+            ui.heading("Actions Organizer");
+            ui.label("Doing what Github can't be bothered to do.");
 
             ui.horizontal(|ui| {
-                ui.label("Write something: ");
+                ui.label("What is your Repository name?: ");
                 ui.text_edit_singleline(&mut self.label);
             });
+            ui.horizontal(|ui| {
+                ui.label("What is your Github API Key?: ");
+                ui.text_edit_singleline(&mut self.label2);
+            });
 
-            ui.add(egui::Slider::new(&mut self.value, 0.0..=10.0).text("value"));
-            if ui.button("Increment").clicked() {
-                self.value += 1.0;
+            if ui.button("Fetch Actions").clicked() {
+                self.error_message = None; // Clear previous error messages
+                // Call the function to fetch GitHub Actions
+                // You need to implement this part
+                match get_actions(&self.label, &self.label2) {
+                    Ok(actions) => {
+                        println!("reached the ok");
+                        self.actions = actions;
+                        self.display_actions = true;
+                        self.label.clear(); // Clear the repository name
+                        self.label2.clear(); // Clear the API key
+                    }
+                    Err(err) => {
+                        println!("Error occured");
+                        self.error_message = Some(format!("Error: {}", err));
+                    }
+                }
             }
 
-            ui.separator();
+            if let Some(error_msg) = &self.error_message {
+                ui.colored_label(egui::Color32::RED, error_msg);
+            }
 
-            ui.add(egui::github_link_file!(
-                "https://github.com/emilk/eframe_template/blob/master/",
-                "Source code."
-            ));
+            if self.display_actions {
+                ui.separator();
+                ui.heading("GitHub Actions:");
+                for action in &self.actions {
+                    ui.label(action);
+                }
+            }
+
+
+            // ui.add(egui::Slider::new(&mut self.value, 0.0..=10.0).text("value"));
+            // if ui.button("Increment").clicked() {
+            //     self.value += 1.0;
+            // }
+
+            // ui.separator();
+            //
+            // ui.add(egui::github_link_file!(
+            //     "https://github.com/emilk/eframe_template/blob/master/",
+            //     "Source code."
+            // ));
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 powered_by_egui_and_eframe(ui);
