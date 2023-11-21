@@ -43,6 +43,6 @@ jobs:
       - name: Archive builds
         uses: actions/upload-artifact@v3
         with:
-          name: Builds
+          name: ${{ env.OS_NAME }}-build
           path: target/release/${{ env.ARTIFACT_NAME }}
             
