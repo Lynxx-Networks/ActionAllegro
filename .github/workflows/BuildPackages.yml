@@ -1,0 +1,34 @@
+name: Build Packages
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  compile:
+    name: Compile
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macOS-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v2
+      - name: Setup Rust
+        uses: ATiltedTree/setup-rust@v1.0.5
+        with:
+          rust-version: stable
+      - name: Build | Compile
+        run: cargo build --release
+
+      - name: Archive builds
+        uses: actions/upload-artifact@v3
+        with:
+          name: Vcenter Info
+          path: target/release/actions_organizer
+            
