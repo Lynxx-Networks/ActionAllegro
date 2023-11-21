@@ -19,6 +19,7 @@ jobs:
 
     # Set an environment variable based on the OS
     env:
+      DEPENDS_SETUP: ${{ (matrix.os == 'ubuntu-latest' && 'true') || 'false' }}
       ARTIFACT_NAME: ${{ (matrix.os == 'windows-latest' && 'actions_organizer.exe') || 'actions_organizer' }}
 
     steps:
@@ -28,10 +29,15 @@ jobs:
         uses: ATiltedTree/setup-rust@v1.0.5
         with:
           rust-version: stable
-      - name: Build | Compile
+
+      - name: Depends install
+        if: ${{ env.DEPENDS_SETUP == 'true' }}
         run: |
           sudo apt update
           sudo apt install -qy libgtk-3-dev
+
+      - name: Build | Compile
+        run: |
           cargo build --release
 
       - name: Archive builds
