@@ -43,6 +43,6 @@ jobs:
       - name: Archive builds
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ env.OS_NAME }}-build
+          name: ${{ matrix.os }}-build
           path: target/release/${{ env.ARTIFACT_NAME }}
             
