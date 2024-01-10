@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::helpers::{get_actions, get_repo};
+use crate::helpers::{get_actions, get_repo, get_workflow_details};
 use egui::{CollapsingHeader, Color32, RichText, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint, vec2, Label, SidePanel, CentralPanel};
 use serde::{Serialize, Deserialize};
 use std::fs;
@@ -32,7 +32,7 @@ pub struct TemplateApp {
     // Example stuff:
     label: String,
     label2: String,
-    actions: Vec<String>, // Store the names of GitHub Actions here
+    actions: HashMap<String, u64>, // Store the names of GitHub Actions here
     display_actions: bool, // Flag to indicate whether to display actions
     error_message: Option<String>,
     columns: Vec<Vec<String>>,
@@ -45,6 +45,9 @@ pub struct TemplateApp {
     current_tab: AppTab,
     config: AppConfig,
     repo_status: RepoStatus,
+    action_detail_window_open: Option<String>,
+    opened_action_id: Option<u64>,
+    opened_workflow_details: Option<Value>,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -155,7 +158,7 @@ impl Default for TemplateApp {
             label: "myuser/myrepo".to_owned(),
             label2: "ghp_sdfjkh238hdsklsdjf983nldfejfds".to_owned(),
             value: 2.7,
-            actions: Vec::new(), // Store the names of GitHub Actions here
+            actions: HashMap::new(), // Store the names of GitHub Actions here
             display_actions: false, // Flag to indicate whether to display actions
             error_message: None,
             current_tab: AppTab::Organize,
@@ -173,6 +176,9 @@ impl Default for TemplateApp {
                 repo_path: None, // Initialize as None
                 // ... initialize other fields ...
             },
+            action_detail_window_open: None,
+            opened_action_id: None,
+            opened_workflow_details: None,
             columns: vec![
                 vec!["Item A", "Item B", "Item C"],
                 vec!["Item D", "Item E"],
@@ -236,6 +242,41 @@ impl TemplateApp {
         // Additional checks can be added here (e.g., comparing with remote)
     }
 
+    fn show_action_details_window(&mut self, ctx: &egui::Context) {
+        if let Some(action) = &self.action_detail_window_open {
+            // Check if the workflow details are already fetched
+            if self.opened_workflow_details.is_none() {
+                // Check if there is an opened action ID
+                if let Some(action_id) = self.opened_action_id {
+                    match get_workflow_details(&self.config.repo_name, &self.config.github_pat, &Some(action_id)) {
+                        Ok(workflow_details) => {
+                            println!("Fetched details for workflow: {}", workflow_details);
+                            self.opened_workflow_details = Some(workflow_details);
+                        },
+                        Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                    }
+                }
+            }
+
+            let mut is_window_open = true;
+            egui::Window::new("Action Details")
+                .open(&mut is_window_open)
+                .show(ctx, |ui| {
+                    if let Some(details) = &self.opened_workflow_details {
+                        ui.label(format!("Workflow Details: {}", details));
+                    } else {
+                        ui.label("Fetching workflow details...");
+                    }
+                });
+
+            // Reset the details when the window is closed
+            if !is_window_open {
+                self.action_detail_window_open = None;
+                self.opened_workflow_details = None;
+                self.opened_action_id = None;
+            }
+        }
+    }
 
 
     fn export_config(&self, path: String) {
@@ -262,6 +303,8 @@ impl TemplateApp {
 
 }
 use std::cell::RefCell;
+use serde_json::Value;
+
 impl eframe::App for TemplateApp {
     /// Called by the frame work to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -270,10 +313,8 @@ impl eframe::App for TemplateApp {
 
     /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
-        // For inspiration and more examples, go to https://emilk.github.io/egui
 
-
+        self.show_action_details_window(ctx);
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
@@ -325,14 +366,20 @@ impl eframe::App for TemplateApp {
                 ui.text_edit_singleline(&mut self.config.github_pat);
             });
             if ui.button("Fetch Actions").clicked() {
-                self.error_message = None; // Clear previous error messages
-                // Now using self.config.repo_name and self.config.github_pat
+                self.error_message = None;
                 match get_actions(&self.config.repo_name, &self.config.github_pat) {
                     Ok(actions) => {
                         println!("Fetched {} actions", actions.len());
-                        self.actions = actions.clone(); // Clone the actions list
-                        self.folders.insert("/".to_owned(), actions); // Add actions to the root folder
-                        self.selected_folder = Some("/".to_owned()); // Set selected folder to root
+                        println!("Actions: {:?}", actions.keys());
+
+                        // Update self.actions
+                        self.actions = actions.clone();
+
+                        // Update folders with action names only
+                        let action_names = actions.keys().cloned().collect::<Vec<String>>();
+                        self.folders.insert("/".to_owned(), action_names);
+
+                        self.selected_folder = Some("/".to_owned());
                         println!("Reached OK");
                         self.display_actions = true;
                     }
@@ -342,6 +389,7 @@ impl eframe::App for TemplateApp {
                     }
                 }
             }
+
 
             if let Some(error_msg) = &self.error_message {
                 ui.colored_label(egui::Color32::RED, error_msg);
@@ -416,24 +464,43 @@ impl eframe::App for TemplateApp {
                             if let Some(folder_name) = &self.selected_folder {
                                 ui.label(format!("Contents of folder: {}", folder_name));
                                 if let Some(folder_actions) = self.folders.get(folder_name) {
-                                    for action in folder_actions {
-                                        let action_id = Id::new(action); // Use action name as the unique identifier
-                                        drag_source(ui, action_id, |ui| {
-                                            ui.label(action);
-                                            ui.memory(|mem| {
-                                                if mem.is_being_dragged(action_id) {
-                                                    self.dragged_action = Some(action.clone());
-                                                }
+                                    for action_name in folder_actions {
+                                        ui.horizontal(|ui| {
+                                            let action_id_ui = Id::new(action_name); // Use action name as the unique identifier for UI elements
+                                            drag_source(ui, action_id_ui, |ui| {
+                                                ui.label(action_name);
+                                                ui.memory(|mem| {
+                                                    if mem.is_being_dragged(action_id_ui) {
+                                                        self.dragged_action = Some(action_name.clone());
+                                                    }
+                                                });
                                             });
+                                            // Add a small button next to the action for selection
+                                            if ui.button("Open").clicked() {
+                                                println!("Opening action: {:?}", action_name);
+                                                if let Some(&action_id) = self.actions.get(action_name) {
+                                                    // Use the numerical ID from the actions HashMap
+                                                    self.opened_action_id = Some(action_id);
+                                                    self.action_detail_window_open = Some(action_name.clone());
+                                                }
+                                            }
                                         });
                                     }
                                 }
                             } else {
                                 ui.label("GitHub Actions:");
-                                for action in &self.actions {
-                                    let action_id = Id::new(action); // Use action name as the unique identifier
-                                    drag_source(ui, action_id, |ui| {
-                                        ui.label(action);
+                                for (action_name, action_id) in &self.actions {
+                                    ui.horizontal(|ui| {
+                                        let action_id_ui = Id::new(action_name); // Use action name as the unique identifier for UI elements
+                                        drag_source(ui, action_id_ui, |ui| {
+                                            ui.label(action_name);
+                                        });
+                                        // Add a small button next to the action for selection
+                                        if ui.button("Open").clicked() {
+                                            self.opened_action_id = Some(*action_id); // Store the numerical ID
+                                            self.action_detail_window_open = Some(action_name.clone()); // Store the action name
+                                            // Code to open a new window or perform another action
+                                        }
                                     });
                                 }
                             }
