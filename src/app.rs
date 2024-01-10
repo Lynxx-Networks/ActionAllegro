@@ -1,10 +1,29 @@
 use std::collections::HashMap;
-use crate::helpers::get_actions;
+use crate::helpers::{get_actions, get_repo};
 use egui::{CollapsingHeader, Color32, RichText, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint, vec2, Label, SidePanel, CentralPanel};
 use serde::{Serialize, Deserialize};
 use std::fs;
 use serde_json;
 use rfd::FileDialog;
+use git2::{Repository, StatusOptions};
+
+
+#[derive(serde::Deserialize, serde::Serialize, PartialEq)]
+enum AppTab {
+    Organize,
+    Pull,
+    // Add more tabs as needed
+}
+
+#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+enum RepoStatus {
+    NotCloned,
+    UpToDate,
+    ChangesMade,
+    // ... other statuses as needed ...
+}
+
+
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -23,6 +42,10 @@ pub struct TemplateApp {
     dragged_action: Option<String>,
     drop_target_folder: Option<String>,
     actions_fetched: bool, // Add this new field
+    current_tab: AppTab,
+    config: AppConfig,
+    repo_status: RepoStatus,
+
 
     #[serde(skip)] // This how you opt-out of serialization of a field
     value: f32,
@@ -34,12 +57,19 @@ struct AppConfig {
     folders: HashMap<String, Vec<String>>,
     repo_name: String,
     github_pat: String,
+    repo_path: Option<String>,
     // ... other fields ...
 }
 
 fn pick_file_location() -> Option<String> {
     FileDialog::new()
         .save_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn pick_folder_location() -> Option<String> {
+    FileDialog::new()
+        .pick_folder()
         .map(|path| path.to_string_lossy().into_owned())
 }
 
@@ -69,13 +99,6 @@ pub fn drag_source(ui: &mut Ui, id: Id, body: impl FnOnce(&mut Ui)) {
         // Paint the body to a new layer:
         let layer_id = LayerId::new(Order::Tooltip, id);
         let response = ui.with_layer_id(layer_id, body).response;
-
-        // Now we move the visuals of the body to where the mouse is.
-        // Normally you need to decide a location for a widget first,
-        // because otherwise that widget cannot interact with the mouse.
-        // However, a dragged component cannot be interacted with anyway
-        // (anything with `Order::Tooltip` always gets an empty [`Response`])
-        // So this is fine!
 
         if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
             let delta = pointer_pos - response.rect.center();
@@ -129,19 +152,27 @@ impl Default for TemplateApp {
         folders.insert("Test Folder 2".to_owned(), vec!["Action 3".to_owned(), "Action 4".to_owned()]);
 
         Self {
-            // Example stuff:
             label: "myuser/myrepo".to_owned(),
             label2: "ghp_sdfjkh238hdsklsdjf983nldfejfds".to_owned(),
             value: 2.7,
             actions: Vec::new(), // Store the names of GitHub Actions here
             display_actions: false, // Flag to indicate whether to display actions
             error_message: None,
+            current_tab: AppTab::Organize,
             folders: HashMap::new(),
             selected_folder: None,
             new_folder_name: String::new(),
             dragged_action: None,
             drop_target_folder: None,
             actions_fetched: false,
+            repo_status: RepoStatus::NotCloned,
+            config: AppConfig {
+                folders: HashMap::new(),
+                repo_name: String::new(),
+                github_pat: String::new(),
+                repo_path: None, // Initialize as None
+                // ... initialize other fields ...
+            },
             columns: vec![
                 vec!["Item A", "Item B", "Item C"],
                 vec!["Item D", "Item E"],
@@ -168,6 +199,44 @@ impl TemplateApp {
         Default::default()
     }
 
+    fn check_repo_status(&mut self) {
+        let repo_path = match self.config.repo_path.as_ref() {
+            Some(path) => path,
+            None => {
+                self.repo_status = RepoStatus::NotCloned;
+                return;
+            }
+        };
+
+        let repo = match Repository::open(repo_path) {
+            Ok(repo) => repo,
+            Err(_) => {
+                self.repo_status = RepoStatus::NotCloned;
+                return;
+            }
+        };
+
+        // Check for uncommitted changes
+        let mut opts = StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = match repo.statuses(Some(&mut opts)) {
+            Ok(statuses) => statuses,
+            Err(_) => {
+                self.repo_status = RepoStatus::NotCloned; // Or handle the error differently
+                return;
+            }
+        };
+
+        if statuses.is_empty() {
+            self.repo_status = RepoStatus::UpToDate;
+        } else {
+            self.repo_status = RepoStatus::ChangesMade;
+        }
+
+        // Additional checks can be added here (e.g., comparing with remote)
+    }
+
+
 
     fn export_config(&self, path: String) {
         println!("test on label: {}", self.label);
@@ -175,6 +244,7 @@ impl TemplateApp {
             folders: self.folders.clone(),
             repo_name: self.label.clone(),   // Set from `label`
             github_pat: self.label2.clone(), // Set from `label2`
+            repo_path: self.config.repo_path.clone(), // Set from `config.repo_path`
             // ... other fields ...
         };
 
@@ -202,6 +272,8 @@ impl eframe::App for TemplateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
         // For inspiration and more examples, go to https://emilk.github.io/egui
+
+
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
@@ -246,17 +318,16 @@ impl eframe::App for TemplateApp {
 
             ui.horizontal(|ui| {
                 ui.label("What is your Repository name?: ");
-                ui.text_edit_singleline(&mut self.label);
+                ui.text_edit_singleline(&mut self.config.repo_name);
             });
             ui.horizontal(|ui| {
                 ui.label("What is your Github API Key?: ");
-                ui.text_edit_singleline(&mut self.label2);
+                ui.text_edit_singleline(&mut self.config.github_pat);
             });
             if ui.button("Fetch Actions").clicked() {
                 self.error_message = None; // Clear previous error messages
-                // Call the function to fetch GitHub Actions
-                // You need to implement this part
-                match get_actions(&self.label, &self.label2) {
+                // Now using self.config.repo_name and self.config.github_pat
+                match get_actions(&self.config.repo_name, &self.config.github_pat) {
                     Ok(actions) => {
                         println!("Fetched {} actions", actions.len());
                         self.actions = actions.clone(); // Clone the actions list
@@ -276,104 +347,183 @@ impl eframe::App for TemplateApp {
                 ui.colored_label(egui::Color32::RED, error_msg);
             }
 
-
-            ui.separator(); // Separate the top elements from the panels below
-            // UI for adding a new folder
             ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.new_folder_name);
-                if ui.button("Add New Folder").clicked() {
-                    if !self.new_folder_name.is_empty() {
-                        self.folders.insert(self.new_folder_name.clone(), Vec::new());
-                        self.new_folder_name.clear(); // Clear the input field after adding
-                    }
+                // Tab for "Organize and Run"
+                if ui.selectable_label(self.current_tab == AppTab::Organize, "Organize and Run").clicked() {
+                    self.current_tab = AppTab::Organize;
                 }
+
+                // Tab for "Pull and Upload"
+                if ui.selectable_label(self.current_tab == AppTab::Pull, "Pull and Upload").clicked() {
+                    self.check_repo_status();
+                    self.current_tab = AppTab::Pull;
+                }
+                // Add more tabs as needed
             });
-            // let mut dropped_action = None;
-            // Layout for the folder structure and main content
-            ui.columns(2, |columns| {
 
-                columns[0].vertical(|ui| {
-                    ui.set_min_width(75.0); // Set a minimum width for the folder column
-                    if ui.button("/").clicked() {
-                        self.selected_folder = Some("/".to_owned());
-                    }
-
-                    // Make each folder a drop target
-                    for folder_name in self.folders.keys() {
-                        if folder_name != "/" {
-                            drop_target(ui, true, |ui| {
-                                let folder_button = ui.button(folder_name);
-                                if folder_button.clicked() {
-                                    self.selected_folder = Some(folder_name.clone());
-                                }
-
-                                // Handling the drop logic
-                                if ui.memory(|mem| mem.is_anything_being_dragged()) {
-                                    ui.input(|input| {
-                                        if input.pointer.any_released() && folder_button.hovered() {
-                                            if let Some(dragged_action) = &self.dragged_action {
-                                                *dropped_action.borrow_mut() = Some((dragged_action.clone(), folder_name.clone()));
-                                            }
-                                        }
-                                    });
-                                }
-                            });
-                        }
-                    }
-                });
-
-
-
-                columns[1].vertical(|ui| {
-                    // Actions display logic
-                    if let Some(folder_name) = &self.selected_folder {
-                        ui.label(format!("Contents of folder: {}", folder_name));
-                        if let Some(folder_actions) = self.folders.get(folder_name) {
-                            for action in folder_actions {
-                                let action_id = Id::new(action); // Use action name as the unique identifier
-                                drag_source(ui, action_id, |ui| {
-                                    ui.label(action);
-                                    ui.memory(|mem| {
-                                        if mem.is_being_dragged(action_id) {
-                                            self.dragged_action = Some(action.clone());
-                                        }
-                                    });
-                                });
+            // Step 4: Render content based on selected tab
+            match self.current_tab {
+                AppTab::Organize => {
+                    ui.separator(); // Separate the top elements from the panels below
+                    // UI for adding a new folder
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut self.new_folder_name);
+                        if ui.button("Add New Folder").clicked() {
+                            if !self.new_folder_name.is_empty() {
+                                self.folders.insert(self.new_folder_name.clone(), Vec::new());
+                                self.new_folder_name.clear(); // Clear the input field after adding
                             }
                         }
-                    } else {
-                        ui.label("GitHub Actions:");
-                        for action in &self.actions {
-                            let action_id = Id::new(action); // Use action name as the unique identifier
-                            drag_source(ui, action_id, |ui| {
-                                ui.label(action);
-                            });
-                        }
-                    }
-                });
-            });
-            // Handle the action drop after the loop to avoid double mutable borrow
-            if let Some((action, target_folder)) = dropped_action.borrow().clone() { // Clone the value here
-                for (folder_name, actions) in self.folders.iter_mut() {
-                    if folder_name != &target_folder && actions.contains(&action) {
-                        // Remove the action from its current folder
-                        actions.retain(|a| a != &action);
-                        break;
-                    }
-                }
+                    });
+                    // let mut dropped_action = None;
+                    // Layout for the folder structure and main content
+                    ui.columns(2, |columns| {
 
-                if let Some(folder_actions) = self.folders.get_mut(&target_folder) {
-                    folder_actions.push(action);
-                }
-                self.dragged_action = None;
+                        columns[0].vertical(|ui| {
+                            ui.set_min_width(75.0); // Set a minimum width for the folder column
+                            if ui.button("/").clicked() {
+                                self.selected_folder = Some("/".to_owned());
+                            }
+
+                            // Make each folder a drop target
+                            for folder_name in self.folders.keys() {
+                                if folder_name != "/" {
+                                    drop_target(ui, true, |ui| {
+                                        let folder_button = ui.button(folder_name);
+                                        if folder_button.clicked() {
+                                            self.selected_folder = Some(folder_name.clone());
+                                        }
+
+                                        // Handling the drop logic
+                                        if ui.memory(|mem| mem.is_anything_being_dragged()) {
+                                            ui.input(|input| {
+                                                if input.pointer.any_released() && folder_button.hovered() {
+                                                    if let Some(dragged_action) = &self.dragged_action {
+                                                        *dropped_action.borrow_mut() = Some((dragged_action.clone(), folder_name.clone()));
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    });
+                                }
+                            }
+                        });
+
+
+
+                        columns[1].vertical(|ui| {
+                            // Actions display logic
+                            if let Some(folder_name) = &self.selected_folder {
+                                ui.label(format!("Contents of folder: {}", folder_name));
+                                if let Some(folder_actions) = self.folders.get(folder_name) {
+                                    for action in folder_actions {
+                                        let action_id = Id::new(action); // Use action name as the unique identifier
+                                        drag_source(ui, action_id, |ui| {
+                                            ui.label(action);
+                                            ui.memory(|mem| {
+                                                if mem.is_being_dragged(action_id) {
+                                                    self.dragged_action = Some(action.clone());
+                                                }
+                                            });
+                                        });
+                                    }
+                                }
+                            } else {
+                                ui.label("GitHub Actions:");
+                                for action in &self.actions {
+                                    let action_id = Id::new(action); // Use action name as the unique identifier
+                                    drag_source(ui, action_id, |ui| {
+                                        ui.label(action);
+                                    });
+                                }
+                            }
+                        });
+                    });
+                    // Handle the action drop after the loop to avoid double mutable borrow
+                    if let Some((action, target_folder)) = dropped_action.borrow().clone() { // Clone the value here
+                        for (folder_name, actions) in self.folders.iter_mut() {
+                            if folder_name != &target_folder && actions.contains(&action) {
+                                // Remove the action from its current folder
+                                actions.retain(|a| a != &action);
+                                break;
+                            }
+                        }
+
+                        if let Some(folder_actions) = self.folders.get_mut(&target_folder) {
+                            folder_actions.push(action);
+                        }
+                        self.dragged_action = None;
+                    }
+
+
+
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                        powered_by_egui_and_eframe(ui);
+                        egui::warn_if_debug_build(ui);
+                    });
+                },
+                AppTab::Pull => {
+                    ui.separator();
+                    ui.vertical_centered(|ui| {
+                        if ui.button("Pull Repository").clicked() {
+                            println!("Pulling repository: {}", self.config.repo_name);
+                            if self.config.repo_name.is_empty() || self.config.github_pat.is_empty() {
+                                self.error_message = Some("Please configure the repository and GitHub PAT before pulling.".to_string());
+                            } else {
+                                self.error_message = None;
+                                if let Some(repo_location) = pick_folder_location() {
+                                    // Check if repository already exists
+                                    match Repository::open(&repo_location) {
+                                        Ok(_) => {
+                                            println!("Repository already exists at the selected location.");
+                                            self.error_message = Some("Repository already exists at the selected location.".to_string());
+                                            // You can implement further logic here, like fetching updates
+                                        },
+                                        Err(_) => {
+                                            self.config.repo_path = Some(repo_location.clone()); // Save the repo path
+                                            // Repository does not exist, attempt to clone
+                                            match get_repo(&self.config.repo_name, &self.config.github_pat, &self.config.repo_path) {
+                                                Ok(_) => {
+                                                    println!("Repository cloned successfully.");
+                                                    self.check_repo_status();
+                                                    self.config.repo_path = Some(repo_location); // Save the repo path
+                                                },
+                                                Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Display the error message if it's set
+                        if let Some(ref message) = self.error_message {
+                            ui.colored_label(egui::Color32::RED, message);
+                        }
+                    });
+                    ui.vertical_centered(|ui| {
+                        if ui.button("Upload Repository").clicked() {
+                            // Implement logic to upload to the repository
+                            // This typically involves adding, committing, and pushing changes
+                        }
+                    });
+                    ui.vertical_centered(|ui| {
+                        // Display the repository status
+                        match self.repo_status {
+                            RepoStatus::NotCloned => ui.label("No repo cloned"),
+                            RepoStatus::UpToDate => ui.label("Repo cloned and up to date"),
+                            RepoStatus::ChangesMade => ui.label("Changes made to repo since last upload"),
+                            // ... handle other statuses ...
+                        }
+                    });
+                    // ... rest of the Pull tab UI ...
+                },
+
+                // Handle other tabs...
             }
 
 
 
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                powered_by_egui_and_eframe(ui);
-                egui::warn_if_debug_build(ui);
-            });
+
         });
     }
 }

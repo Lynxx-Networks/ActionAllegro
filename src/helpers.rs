@@ -1,6 +1,10 @@
 use reqwest;
 use serde_json::Value;
 use std::error::Error;
+use std::path::Path;
+use git2;
+use git2::{Cred, FetchOptions, RemoteCallbacks, Repository};
+use git2::build::RepoBuilder;
 
 pub fn get_actions(repo: &str, token: &str) -> Result<Vec<String>, Box<dyn Error>> {
     println!("Fetching actions for repository: {}", repo);
@@ -28,4 +32,34 @@ pub fn get_actions(repo: &str, token: &str) -> Result<Vec<String>, Box<dyn Error
     }
 
     Ok(actions)
+}
+
+pub fn get_repo(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result<(), Box<dyn Error>> {
+    println!("Cloning repository: {}", repo_slug);
+    println!("Using API key: {}", api_key);
+    println!("Using path: {:?}", path);
+    let repo_url = format!("https://github.com/{}.git", repo_slug);
+    println!("Cloning repository: {}", &repo_url);
+    let mut cb = RemoteCallbacks::new();
+    cb.credentials(move |_url, _username_from_url, _allowed_types| {
+        Cred::userpass_plaintext("dummy_username", api_key)
+    });
+
+    let mut fo = FetchOptions::new();
+    fo.remote_callbacks(cb);
+
+    let mut builder = RepoBuilder::new();
+    builder.fetch_options(fo);
+
+    // Check if path is Some and convert to Path
+    if let Some(ref path_str) = path {
+        let path = Path::new(path_str);
+
+        match builder.clone(&*repo_url, path) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(Box::new(e)),
+        }
+    } else {
+        Err("No path provided for cloning the repository".into())
+    }
 }
