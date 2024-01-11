@@ -5,7 +5,7 @@ use std::error::Error;
 use std::path::Path;
 use egui::Id;
 use git2;
-use git2::{Cred, FetchOptions, RemoteCallbacks, Repository};
+use git2::{Commit, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository};
 use git2::build::RepoBuilder;
 
 pub fn get_actions(repo: &str, token: &str) -> Result<HashMap<String, u64>, Box<dyn Error>> {
@@ -89,6 +89,39 @@ pub fn get_repo(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result
     } else {
         Err("No path provided for cloning the repository".into())
     }
+}
+
+pub fn push_repo(repo_path: &str, api_key: &str) -> Result<(), Box<dyn Error>> {
+    println!("Pushing to repository at path: {}", repo_path);
+
+    // Open the existing repository
+    let repo = Repository::open(repo_path)?;
+    let mut remote = repo.find_remote("origin")?;
+
+    // Prepare authentication callbacks
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_url, _username_from_url, _allowed_types| {
+        Cred::userpass_plaintext("dummy_username", api_key)
+    });
+
+    // Prepare push options with the callbacks
+    let mut push_opts = PushOptions::new();
+    push_opts.remote_callbacks(callbacks);
+
+    // Push changes
+    // Assuming 'main' branch, adjust as necessary
+    remote.push(&["refs/heads/main:refs/heads/main"], Some(&mut push_opts))?;
+
+    Ok(())
+}
+
+pub fn find_last_commit(repo: &Repository) -> Result<Commit, Box<dyn Error>> {
+    // First look up the HEAD of the repository
+    let head = repo.head()?;
+
+    // Then lookup the commit that HEAD points to
+    let commit = head.peel_to_commit()?;
+    Ok(commit)
 }
 
 pub fn pull_workflow_yaml(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result<String, Box<dyn Error>> {

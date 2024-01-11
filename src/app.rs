@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::helpers::{get_actions, get_repo, get_workflow_details, pull_workflow_yaml, run_workflow};
+use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow};
 use egui::{CollapsingHeader, Color32, RichText, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint, vec2, Label, SidePanel, CentralPanel};
 use serde::{Serialize, Deserialize};
 use std::fs;
@@ -65,6 +65,8 @@ pub struct TemplateApp {
     input_text: String,
     selected_option: String,
     current_input_values: HashMap<String, String>,
+    commit_message: String,
+    show_commit_message_input: bool,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -203,6 +205,8 @@ impl Default for TemplateApp {
             active_workflow_type: Option::from(String::new()),
             active_workflow_inputs: Option::from(HashMap::new()),
             current_input_values: HashMap::new(),
+            commit_message: String::new(),
+            show_commit_message_input: false,
             columns: vec![
                 vec!["Item A", "Item B", "Item C"],
                 vec!["Item D", "Item E"],
@@ -495,6 +499,7 @@ impl TemplateApp {
 
 }
 use std::cell::RefCell;
+use std::path::Path;
 
 impl eframe::App for TemplateApp {
     /// Called by the frame work to save state before shutdown.
@@ -763,8 +768,63 @@ impl eframe::App for TemplateApp {
                     });
                     ui.vertical_centered(|ui| {
                         if ui.button("Upload Repository").clicked() {
-                            // Implement logic to upload to the repository
-                            // This typically involves adding, committing, and pushing changes
+                            self.show_commit_message_input = true;
+                            // Use a local variable to determine if the window should be closed
+                            let mut close_window = false;
+
+                            if self.show_commit_message_input {
+                                egui::Window::new("Commit Changes")
+                                    .open(&mut self.show_commit_message_input)
+                                    .show(ctx, |ui| {
+                                        ui.text_edit_singleline(&mut self.commit_message);
+                                        if ui.button("Commit & Push").clicked() {
+                                            // The logic for committing and pushing goes here
+                                            // Use self.commit_message as the commit message
+                                            close_window = true;
+                                        }
+                                    });
+                            }
+
+                            if close_window {
+                                self.show_commit_message_input = false;
+                            }
+                            if let Some(ref repo_path) = self.config.repo_path {
+                                match Repository::open(repo_path) {
+                                    Ok(repo) => {
+                                        // Step 1: Check if there are changes
+                                        let statuses = repo.statuses(None).unwrap(); // handle this unwrap properly
+                                        if statuses.is_empty() {
+                                            self.info_message = Some("No changes to upload".to_string());
+                                        } else {
+                                            // Step 2: Stage changes
+                                            let mut index = repo.index().unwrap(); // handle this unwrap properly
+                                            for entry in statuses.iter() {
+                                                let path = entry.path().unwrap(); // handle this unwrap properly
+                                                index.add_path(Path::new(path)).unwrap(); // handle this unwrap properly
+                                            }
+                                            index.write().unwrap(); // handle this unwrap properly
+
+                                            // Step 3: Commit changes
+                                            let oid = index.write_tree().unwrap(); // handle this unwrap properly
+                                            let signature = repo.signature().unwrap(); // handle this unwrap properly
+                                            let parent_commit = find_last_commit(&repo).unwrap(); // function to find the last commit
+                                            let tree = repo.find_tree(oid).unwrap(); // handle this unwrap properly
+                                            // Inside your logic for committing and pushing
+                                            repo.commit(Some("HEAD"), &signature, &signature, &self.commit_message, &tree, &[&parent_commit]).unwrap(); // handle this unwrap properly
+
+                                            // Step 4: Push the commit
+                                            if let Err(e) = push_repo(repo_path, &self.config.github_pat) {
+                                                self.error_message = Some(format!("Failed to push changes: {}", e));
+                                                self.check_repo_status();
+                                            } else {
+                                                self.info_message = Some("Changes uploaded successfully".to_string());
+                                                self.check_repo_status();
+                                            }
+                                        }
+                                    },
+                                    Err(e) => self.error_message = Some(format!("Failed to open repository: {}", e)),
+                                }
+                            }
                         }
                     });
                     ui.vertical_centered(|ui| {
