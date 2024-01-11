@@ -1,11 +1,15 @@
 use std::collections::HashMap;
-use crate::helpers::{get_actions, get_repo, get_workflow_details};
+use crate::helpers::{get_actions, get_repo, get_workflow_details, pull_workflow_yaml, run_workflow};
 use egui::{CollapsingHeader, Color32, RichText, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint, vec2, Label, SidePanel, CentralPanel};
 use serde::{Serialize, Deserialize};
 use std::fs;
 use serde_json;
 use rfd::FileDialog;
 use git2::{Repository, StatusOptions};
+use serde_yaml::Value;
+type JsonValue = serde_json::Value;
+type YamlValue = serde_yaml::Value;
+
 
 
 #[derive(serde::Deserialize, serde::Serialize, PartialEq)]
@@ -23,7 +27,13 @@ enum RepoStatus {
     // ... other statuses as needed ...
 }
 
-
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+pub struct WorkflowInput {
+    pub input_type: String,
+    pub description: String,
+    pub required: bool,
+    pub options: Option<Vec<String>>,
+}
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -35,6 +45,7 @@ pub struct TemplateApp {
     actions: HashMap<String, u64>, // Store the names of GitHub Actions here
     display_actions: bool, // Flag to indicate whether to display actions
     error_message: Option<String>,
+    info_message: Option<String>,
     columns: Vec<Vec<String>>,
     folders: HashMap<String, Vec<String>>,
     selected_folder: Option<String>,
@@ -47,7 +58,13 @@ pub struct TemplateApp {
     repo_status: RepoStatus,
     action_detail_window_open: Option<String>,
     opened_action_id: Option<u64>,
-    opened_workflow_details: Option<Value>,
+    opened_workflow_details: Option<String>,
+    parsed_workflow_yaml: Option<Value>,
+    active_workflow_type: Option<String>,
+    active_workflow_inputs: Option<HashMap<String, WorkflowInput>>,
+    input_text: String,
+    selected_option: String,
+    current_input_values: HashMap<String, String>,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -161,6 +178,7 @@ impl Default for TemplateApp {
             actions: HashMap::new(), // Store the names of GitHub Actions here
             display_actions: false, // Flag to indicate whether to display actions
             error_message: None,
+            info_message: None,
             current_tab: AppTab::Organize,
             folders: HashMap::new(),
             selected_folder: None,
@@ -179,6 +197,12 @@ impl Default for TemplateApp {
             action_detail_window_open: None,
             opened_action_id: None,
             opened_workflow_details: None,
+            parsed_workflow_yaml: None,
+            selected_option: String::new(),
+            input_text: String::new(),
+            active_workflow_type: Option::from(String::new()),
+            active_workflow_inputs: Option::from(HashMap::new()),
+            current_input_values: HashMap::new(),
             columns: vec![
                 vec!["Item A", "Item B", "Item C"],
                 vec!["Item D", "Item E"],
@@ -245,25 +269,191 @@ impl TemplateApp {
     fn show_action_details_window(&mut self, ctx: &egui::Context) {
         if let Some(action) = &self.action_detail_window_open {
             // Check if the workflow details are already fetched
+            let mut window_title = "Action Details".to_string();
+            let mut is_window_open = true;
             if self.opened_workflow_details.is_none() {
                 // Check if there is an opened action ID
                 if let Some(action_id) = self.opened_action_id {
                     match get_workflow_details(&self.config.repo_name, &self.config.github_pat, &Some(action_id)) {
                         Ok(workflow_details) => {
-                            println!("Fetched details for workflow: {}", workflow_details);
-                            self.opened_workflow_details = Some(workflow_details);
+                            let workflow_details_str = workflow_details.to_string();
+                            println!("Fetched details for workflow: {}", workflow_details_str);
+                            self.opened_workflow_details = Some(workflow_details_str.clone());
+
+                            // Parse the JSON to get the workflow file path
+                            if let Some(ref details_str) = self.opened_workflow_details {
+                                match serde_json::from_str::<JsonValue>(details_str) {
+                                    Ok(workflow_details) => {
+                                        // Proceed with extracting the workflow file path
+                                        if let Some(path) = workflow_details["path"].as_str() {
+                                            match pull_workflow_yaml(&self.config.repo_name, &self.config.github_pat, &Some(path.to_string())) {
+                                                Ok(yaml_content) => {
+                                                    match serde_yaml::from_str::<YamlValue>(&yaml_content) {
+                                                        Ok(parsed_yaml) => {
+                                                            // Process the parsed YAML content
+                                                            if let Some(triggers) = parsed_yaml.get("on").and_then(|on| on.as_mapping()) {
+                                                                for (trigger_type, details) in triggers {
+                                                                    if trigger_type.as_str() == Some("workflow_dispatch") {
+                                                                        self.active_workflow_type = Some("workflow_dispatch".to_string());
+
+                                                                        // Process inputs if available
+                                                                        if let Some(inputs) = details.get("inputs").and_then(|i| i.as_mapping()) {
+                                                                            let mut inputs_map = HashMap::new();
+                                                                            for (input_name, input_details) in inputs {
+                                                                                if let Some(input_name_str) = input_name.as_str() {
+                                                                                    let input = WorkflowInput {
+                                                                                        input_type: input_details.get("type").and_then(|t| t.as_str()).unwrap_or("string").to_string(),
+                                                                                        description: input_details.get("description").and_then(|d| d.as_str()).unwrap_or_default().to_string(),
+                                                                                        required: input_details.get("required").and_then(|r| r.as_bool()).unwrap_or(false),
+                                                                                        options: Some(input_details.get("options").and_then(|o| o.as_sequence()).map_or_else(Vec::new, |opts| opts.iter().filter_map(|opt| opt.as_str()).map(|s| s.to_string()).collect())),
+                                                                                    };
+                                                                                    inputs_map.insert(input_name_str.to_string(), input);
+                                                                                }
+                                                                            }
+                                                                            self.active_workflow_inputs = Some(inputs_map);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                        Err(e) => {
+                                                            self.error_message = Some(format!("YAML parsing error: {}", e));
+                                                            return;
+                                                        }
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    self.error_message = Some(format!("Error pulling YAML: {}", e));
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    },
+                                    Err(e) => {
+                                        // Handle the error appropriately
+                                        self.error_message = Some(format!("JSON parsing error: {}", e));
+                                        return;
+                                    }
+                                }
+                                if let Some(ref details_str) = self.opened_workflow_details {
+                                    match serde_json::from_str::<JsonValue>(details_str) {
+                                        Ok(workflow_details) => {
+                                            // Proceed with extracting the workflow file path
+                                            if let Some(path) = workflow_details["path"].as_str() {
+                                                // ... rest of your code ...
+                                            }
+                                        },
+                                        Err(e) => {
+                                            self.error_message = Some(format!("JSON parsing error: {}", e));
+                                            return;
+                                        }
+                                    }
+                                }
+
+                            }
                         },
                         Err(e) => self.error_message = Some(format!("Error: {}", e)),
                     }
                 }
             }
 
+            // Parse the workflow details for the window title
+            if let Some(ref details_str) = self.opened_workflow_details {
+                if let Ok(workflow_details) = serde_json::from_str::<serde_json::Value>(details_str) {
+                    if let Some(name) = workflow_details["name"].as_str() {
+                        window_title = name.to_string();
+                    }
+                }
+            }
+
             let mut is_window_open = true;
-            egui::Window::new("Action Details")
+            egui::Window::new(window_title)
                 .open(&mut is_window_open)
                 .show(ctx, |ui| {
                     if let Some(details) = &self.opened_workflow_details {
-                        ui.label(format!("Workflow Details: {}", details));
+                        if let Some(ref details_str) = self.opened_workflow_details {
+                            match serde_json::from_str::<serde_json::Value>(details_str) {
+                                Ok(workflow_details) => {
+                                    // Display workflow name as a header
+                                    if let Some(name) = workflow_details["name"].as_str() {
+                                        ui.heading(name);
+                                    }
+
+                                    // Display clickable URL
+                                    if let Some(html_url) = workflow_details["html_url"].as_str() {
+                                        if ui.hyperlink_to("Link to workflow", html_url).clicked() {
+                                            // Handle the click event, if needed
+                                        }
+                                    }
+                                    // Create and display the link to the workflow logs
+                                    if let Some(path) = workflow_details["path"].as_str() {
+                                        let log_url = format!("https://github.com/{}/actions/workflows/{}", self.config.repo_name, path.clone());
+                                        if ui.hyperlink_to("View Workflow Logs", log_url).clicked() {
+                                            // Handle the click event, if needed
+                                        }
+                                    }
+
+                                    // Display other details
+                                    if let Some(path) = workflow_details["path"].as_str() {
+                                        ui.label(format!("Path: {}", path));
+                                    }
+                                    if let Some(created_at) = workflow_details["created_at"].as_str() {
+                                        ui.label(format!("Created at: {}", created_at));
+                                    }
+                                    if let Some(state) = workflow_details["state"].as_str() {
+                                        ui.label(format!("State: {}", state));
+                                    }
+                                    ui.separator();
+
+                                    // ... rest of your code for extracting the workflow file path ...
+                                },
+                                Err(e) => {
+                                    self.error_message = Some(format!("JSON parsing error: {}", e));
+                                    return;
+                                }
+                            }
+                        }
+                        if let Some(inputs) = &self.active_workflow_inputs {
+                            ui.label("Workflow Inputs:");
+                            let mut workflow_inputs_data = HashMap::new();
+                            for (input_name, input_details) in inputs {
+                                ui.horizontal(|ui| {
+                                    ui.label(input_name);
+                                    let mut input_value = String::new();
+                                    match input_details.input_type.as_str() {
+                                        "choice" => {
+                                            if let Some(options) = &input_details.options {
+                                                let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(|| options.get(0).cloned().unwrap_or_default());
+                                                // Create a dropdown for choice type
+                                                egui::ComboBox::from_label(input_name)
+                                                    .selected_text("Select an option")
+                                                    .show_ui(ui, |ui| {
+                                                        for option in options {
+                                                            ui.selectable_value(current_value, option.clone(), option);
+                                                        }
+                                                    });
+                                            }
+                                        }
+                                        _ => {
+                                            // Create a text box for string type
+                                            let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(String::new);
+                                            if ui.text_edit_singleline(current_value).changed() {
+                                                // Value updated in the map automatically
+                                            }
+                                        }
+                                    }
+                                    workflow_inputs_data.insert(input_name.clone(), input_value);
+                                });
+                            }
+                            if ui.button("Run Workflow").clicked() {
+                                let workflow_id = self.opened_action_id.unwrap(); // Make sure to handle unwrap properly
+                                let result = run_workflow(&self.config.repo_name, &self.config.github_pat, workflow_id, Some(&self.current_input_values));
+                                match result {
+                                    Ok(_) => self.info_message = Some(("Workflow triggered successfully").parse().unwrap()),
+                                    Err(e) => self.error_message = Some(format!("Failed to trigger workflow: {}", e)),
+                                }
+                            }
+                        }
                     } else {
                         ui.label("Fetching workflow details...");
                     }
@@ -274,6 +464,8 @@ impl TemplateApp {
                 self.action_detail_window_open = None;
                 self.opened_workflow_details = None;
                 self.opened_action_id = None;
+                self.active_workflow_type = None;
+                self.active_workflow_inputs = None;
             }
         }
     }
@@ -303,7 +495,6 @@ impl TemplateApp {
 
 }
 use std::cell::RefCell;
-use serde_json::Value;
 
 impl eframe::App for TemplateApp {
     /// Called by the frame work to save state before shutdown.
@@ -393,6 +584,9 @@ impl eframe::App for TemplateApp {
 
             if let Some(error_msg) = &self.error_message {
                 ui.colored_label(egui::Color32::RED, error_msg);
+            }
+            if let Some(error_msg) = &self.info_message {
+                ui.colored_label(egui::Color32::GREEN, error_msg);
             }
 
             ui.horizontal(|ui| {

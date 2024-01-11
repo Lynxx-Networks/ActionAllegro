@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use reqwest;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::error::Error;
 use std::path::Path;
 use egui::Id;
@@ -88,5 +88,74 @@ pub fn get_repo(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result
         }
     } else {
         Err("No path provided for cloning the repository".into())
+    }
+}
+
+pub fn pull_workflow_yaml(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result<String, Box<dyn Error>> {
+    println!("Pulling workflow YAML for repository: {}", repo_slug);
+    println!("Using API key: {}", api_key);
+    println!("Using path: {:?}", path);
+
+    if let Some(workflow_path) = path {
+        let repo_url = format!("https://api.github.com/repos/{}/contents/{}", repo_slug, workflow_path);
+        let client = reqwest::blocking::Client::new();
+        let response = client.get(&repo_url)
+            .header("User-Agent", "reqwest")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .send()?;
+
+        if response.status().is_success() {
+            let content = response.json::<serde_json::Value>()?;
+            if let Some(content_str) = content["content"].as_str() {
+                // Remove newline and other whitespace characters
+                let clean_content_str = content_str.replace("\n", "").replace("\r", "").trim().to_string();
+
+                let decoded_content = base64::decode(&clean_content_str)?;
+                let yaml_content = String::from_utf8(decoded_content)?;
+                return Ok(yaml_content);
+            }
+        }
+
+        Err("Failed to fetch or decode workflow YAML".into())
+    } else {
+        Err("Workflow path not provided".into())
+    }
+}
+
+pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, inputs: Option<&HashMap<String, String>>) -> Result<(), Box<dyn Error>> {
+    println!("Triggering workflow for repository: {}", repo_slug);
+
+    let url = format!("https://api.github.com/repos/{}/actions/workflows/{}/dispatches", repo_slug, workflow_id);
+    let client = reqwest::blocking::Client::new();
+
+    // Prepare the JSON body
+    let mut body = json!({
+        "ref": "main" // Assuming 'main' branch, adjust as necessary
+    });
+
+    // Correctly structure the inputs within the body
+    if let Some(inputs_data) = inputs {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("inputs".to_string(), json!(inputs_data));
+        }
+    }
+
+    // Print the request body for debugging
+    let request_body = serde_json::to_string_pretty(&body).unwrap_or_else(|_| "Failed to serialize request body".to_string());
+    println!("Request body:\n{}", request_body);
+
+
+    let response = client.post(&url)
+        .header("User-Agent", "reqwest")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept", "application/vnd.github.v3+json")
+        .json(&body)
+        .send()?;
+
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let error_msg = response.text()?;
+        Err(error_msg.into())
     }
 }
