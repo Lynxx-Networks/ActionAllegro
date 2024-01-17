@@ -127,6 +127,7 @@ pub struct TemplateApp {
     active_workflow_type: Option<String>,
     active_workflow_inputs: Option<HashMap<String, WorkflowInput>>,
     input_text: String,
+    input_descriptions: HashMap<String, String>,
     selected_option: String,
     current_input_values: HashMap<String, String>,
     commit_message: String,
@@ -281,6 +282,7 @@ impl Default for TemplateApp {
             selected_option: String::new(),
             first_launch: true,
             input_text: String::new(),
+            input_descriptions: HashMap::new(),
             active_workflow_type: Option::from(String::new()),
             active_workflow_inputs: Option::from(HashMap::new()),
             current_input_values: HashMap::new(),
@@ -416,15 +418,18 @@ impl TemplateApp {
                                                                         // Process inputs if available
                                                                         if let Some(inputs) = details.get("inputs").and_then(|i| i.as_mapping()) {
                                                                             let mut inputs_map = HashMap::new();
+                                                                            // let description = details.get("description").and_then(|d| d.as_str()).unwrap_or_default().to_string();
                                                                             for (input_name, input_details) in inputs {
                                                                                 if let Some(input_name_str) = input_name.as_str() {
+                                                                                    let input_description = input_details.get("description").and_then(|d| d.as_str()).unwrap_or_default().to_string();
                                                                                     let input = WorkflowInput {
                                                                                         input_type: input_details.get("type").and_then(|t| t.as_str()).unwrap_or("string").to_string(),
-                                                                                        description: input_details.get("description").and_then(|d| d.as_str()).unwrap_or_default().to_string(),
+                                                                                        description: input_description.clone(),
                                                                                         required: input_details.get("required").and_then(|r| r.as_bool()).unwrap_or(false),
                                                                                         options: Some(input_details.get("options").and_then(|o| o.as_sequence()).map_or_else(Vec::new, |opts| opts.iter().filter_map(|opt| opt.as_str()).map(|s| s.to_string()).collect())),
                                                                                     };
                                                                                     inputs_map.insert(input_name_str.to_string(), input);
+                                                                                    self.input_descriptions.insert(input_name_str.to_string(), input_description.clone()); // Corrected placement
                                                                                 }
                                                                             }
                                                                             self.active_workflow_inputs = Some(inputs_map);
@@ -530,47 +535,56 @@ impl TemplateApp {
                                 }
                             }
                         }
-                        if let Some(inputs) = &self.active_workflow_inputs {
-                            ui.label("Workflow Inputs:");
-                            let mut workflow_inputs_data = HashMap::new();
-                            for (input_name, input_details) in inputs {
-                                ui.horizontal(|ui| {
-                                    ui.label(input_name);
-                                    let mut input_value = String::new();
-                                    match input_details.input_type.as_str() {
-                                        "choice" => {
-                                            if let Some(options) = &input_details.options {
-                                                let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(|| options.get(0).cloned().unwrap_or_default());
-                                                // Create a dropdown for choice type
-                                                egui::ComboBox::from_label(input_name)
-                                                    .selected_text("Select an option")
-                                                    .show_ui(ui, |ui| {
-                                                        for option in options {
-                                                            ui.selectable_value(current_value, option.clone(), option);
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            if let Some(inputs) = &self.active_workflow_inputs {
+                                for (input_name, input_details) in inputs {
+                                    ui.horizontal(|ui| {
+                                        ui.push_id(input_name, |ui| { // Ensure each input has a unique ID
+                                            // Vertical layout for the label (description) and the input field
+                                            ui.vertical(|ui| {
+                                                // Display the description as a label above the input
+                                                // Display the variable name
+                                                ui.label(input_name);
+                                                if let Some(description) = self.input_descriptions.get(input_name) {
+                                                    ui.label(description);
+                                                }
+
+                                                let mut input_value = String::new();
+                                                match input_details.input_type.as_str() {
+                                                    "choice" => {
+                                                        if let Some(options) = &input_details.options {
+                                                            let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(|| options.get(0).cloned().unwrap_or_default());
+                                                            // Create a dropdown for choice type
+                                                            egui::ComboBox::from_label("")
+                                                                .selected_text(current_value.clone())
+                                                                .show_ui(ui, |ui| {
+                                                                    for option in options {
+                                                                        ui.selectable_value(current_value, option.clone(), option);
+                                                                    }
+                                                                });
                                                         }
-                                                    });
-                                            }
-                                        }
-                                        _ => {
-                                            // Create a text box for string type
-                                            let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(String::new);
-                                            if ui.text_edit_singleline(current_value).changed() {
-                                                // Value updated in the map automatically
-                                            }
-                                        }
+                                                    }
+                                                    _ => {
+                                                        // Create a text box for string type
+                                                        let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(String::new);
+                                                        ui.text_edit_singleline(current_value);
+                                                    }
+                                                }
+                                            });
+                                        });
+                                        // workflow_inputs_data.insert(input_name.clone(), input_value);
+                                    });
+                                }
+                                if ui.button("Run Workflow").clicked() {
+                                    let workflow_id = self.opened_action_id.unwrap(); // Make sure to handle unwrap properly
+                                    let result = run_workflow(&self.config.repo_name, &self.decrypted_github_pat, workflow_id, Some(&self.current_input_values));
+                                    match result {
+                                        Ok(_) => self.info_message = Some(("Workflow triggered successfully").parse().unwrap()),
+                                        Err(e) => self.error_message = Some(format!("Failed to trigger workflow: {}", e)),
                                     }
-                                    workflow_inputs_data.insert(input_name.clone(), input_value);
-                                });
-                            }
-                            if ui.button("Run Workflow").clicked() {
-                                let workflow_id = self.opened_action_id.unwrap(); // Make sure to handle unwrap properly
-                                let result = run_workflow(&self.config.repo_name, &self.decrypted_github_pat, workflow_id, Some(&self.current_input_values));
-                                match result {
-                                    Ok(_) => self.info_message = Some(("Workflow triggered successfully").parse().unwrap()),
-                                    Err(e) => self.error_message = Some(format!("Failed to trigger workflow: {}", e)),
                                 }
                             }
-                        }
+                        });
                     } else {
                         ui.label("Fetching workflow details...");
                     }
@@ -913,31 +927,33 @@ impl eframe::App for TemplateApp {
                             columns[1].vertical(|ui| {
                                 // Actions display logic
                                 if let Some(folder_name) = &self.selected_folder {
-                                    ui.label(format!("Contents of folder: {}", folder_name));
-                                    if let Some(folder_actions) = self.folders.get(folder_name) {
-                                        for action_name in folder_actions {
-                                            ui.horizontal(|ui| {
-                                                let action_id_ui = Id::new(action_name); // Use action name as the unique identifier for UI elements
-                                                drag_source(ui, action_id_ui, |ui| {
-                                                    ui.label(action_name);
-                                                    ui.memory(|mem| {
-                                                        if mem.is_being_dragged(action_id_ui) {
-                                                            self.dragged_action = Some(action_name.clone());
-                                                        }
+                                    egui::ScrollArea::vertical().show(ui, |ui| {
+                                        ui.label(format!("Contents of folder: {}", folder_name));
+                                        if let Some(folder_actions) = self.folders.get(folder_name) {
+                                            for action_name in folder_actions {
+                                                ui.horizontal(|ui| {
+                                                    let action_id_ui = Id::new(action_name); // Use action name as the unique identifier for UI elements
+                                                    drag_source(ui, action_id_ui, |ui| {
+                                                        ui.label(action_name);
+                                                        ui.memory(|mem| {
+                                                            if mem.is_being_dragged(action_id_ui) {
+                                                                self.dragged_action = Some(action_name.clone());
+                                                            }
+                                                        });
                                                     });
-                                                });
-                                                // Add a small button next to the action for selection
-                                                if ui.button("Open").clicked() {
-                                                    println!("Opening action: {:?}", action_name);
-                                                    if let Some(&action_id) = self.actions.get(action_name) {
-                                                        // Use the numerical ID from the actions HashMap
-                                                        self.opened_action_id = Some(action_id);
-                                                        self.action_detail_window_open = Some(action_name.clone());
+                                                    // Add a small button next to the action for selection
+                                                    if ui.button("Open").clicked() {
+                                                        println!("Opening action: {:?}", action_name);
+                                                        if let Some(&action_id) = self.actions.get(action_name) {
+                                                            // Use the numerical ID from the actions HashMap
+                                                            self.opened_action_id = Some(action_id);
+                                                            self.action_detail_window_open = Some(action_name.clone());
+                                                        }
                                                     }
-                                                }
-                                            });
+                                                });
+                                            }
                                         }
-                                    }
+                                    });
                                 } else {
                                     ui.label("GitHub Actions:");
                                     for (action_name, action_id) in &self.actions {
