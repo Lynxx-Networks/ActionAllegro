@@ -15,9 +15,9 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "actions organizer",
+        "ActionAllegro",
         native_options,
-        Box::new(|cc| Box::new(actions_organizer::TemplateApp::new(cc))),
+        Box::new(|cc| Box::new(ActionAllegro::TemplateApp::new(cc))),
     )
 }
 

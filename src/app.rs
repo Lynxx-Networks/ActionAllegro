@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize};
 use std::fs;
 use serde_json;
 use rfd::FileDialog;
-use git2::{Repository, StatusOptions};
+use git2::{Repository, StatusOptions, StatusShow};
 use serde_yaml::Value;
 use directories::ProjectDirs;
 use std::time::{Duration, Instant};
@@ -120,6 +120,10 @@ pub struct TemplateApp {
     last_save_time: Instant,
     #[serde(skip)]
     auto_save_interval: Duration,
+    #[serde(skip)]
+    last_git_time: Instant,
+    #[serde(skip)]
+    auto_git_interval: Duration,
     action_detail_window_open: Option<String>,
     opened_action_id: Option<u64>,
     opened_workflow_details: Option<String>,
@@ -137,6 +141,7 @@ pub struct TemplateApp {
     password_attempt: String,
     encoded_github_pat: String,
     decrypted_github_pat: String,
+    repo_path: Option<String>,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -276,7 +281,9 @@ impl Default for TemplateApp {
             action_detail_window_open: None,
             opened_action_id: None,
             last_save_time: Instant::now(),
-            auto_save_interval: Duration::from_secs(20),
+            auto_save_interval: Duration::from_secs(30),
+            last_git_time: Instant::now(),
+            auto_git_interval: Duration::from_secs(2),
             opened_workflow_details: None,
             parsed_workflow_yaml: None,
             selected_option: String::new(),
@@ -297,6 +304,7 @@ impl Default for TemplateApp {
             show_commit_message_input: false,
             encoded_github_pat: String::new(),
             decrypted_github_pat: String::new(),
+            repo_path: None,
             columns: vec![
                 vec!["Item A", "Item B", "Item C"],
                 vec!["Item D", "Item E"],
@@ -357,33 +365,101 @@ impl TemplateApp {
             }
         };
 
-        let repo = match Repository::open(repo_path) {
-            Ok(repo) => repo,
-            Err(_) => {
-                self.repo_status = RepoStatus::NotCloned;
-                return;
-            }
-        };
+        // Open the repository
+        match Repository::open(repo_path) {
+            Ok(repo) => {
+                let mut opts = StatusOptions::new();
+                opts.show(StatusShow::IndexAndWorkdir);
+                opts.include_untracked(true);
+                opts.renames_head_to_index(true);
+                opts.renames_index_to_workdir(true);
 
-        // Check for uncommitted changes
-        let mut opts = StatusOptions::new();
-        opts.include_untracked(true);
-        let statuses = match repo.statuses(Some(&mut opts)) {
-            Ok(statuses) => statuses,
-            Err(_) => {
-                self.repo_status = RepoStatus::NotCloned; // Or handle the error differently
-                return;
+                match repo.statuses(Some(&mut opts)) {
+                    Ok(statuses) => {
+                        if statuses.is_empty() {
+                            self.repo_status = RepoStatus::UpToDate;
+                        } else {
+                            self.repo_status = RepoStatus::ChangesMade;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to retrieve repository statuses: {}", e);
+                        // Handle error appropriately
+                    }
+                }
             }
-        };
-
-        if statuses.is_empty() {
-            self.repo_status = RepoStatus::UpToDate;
-        } else {
-            self.repo_status = RepoStatus::ChangesMade;
+            Err(e) => {
+                eprintln!("Failed to open repository: {}", e);
+                // Handle error appropriately
+            }
         }
-
-        // Additional checks can be added here (e.g., comparing with remote)
     }
+
+    fn handle_commit_and_push(&mut self) {
+        if let Some(ref repo_path) = self.config.repo_path {
+            match Repository::open(repo_path) {
+                Ok(repo) => {
+                    // Step 1: Check if there are changes
+                    let statuses = repo.statuses(None).unwrap(); // Handle this unwrap properly
+                    if statuses.is_empty() {
+                        self.info_message = Some("No changes to upload".to_string());
+                    } else {
+// Step 2: Stage changes
+                        let mut index = repo.index().unwrap(); // Handle this unwrap properly
+                        for entry in statuses.iter() {
+                            let path_str = entry.path().unwrap(); // Handle this unwrap properly
+                            let path = Path::new(path_str);
+                            let status = entry.status();
+
+                            if status.is_index_deleted() || status.is_wt_deleted() {
+                                // Handle file deletion
+                                index.remove_path(path).unwrap(); // Handle this unwrap properly
+                            } else if status.is_index_new() || status.is_wt_new() {
+                                // Handle new files and directories
+                                if path.is_dir() {
+                                    // If the path is a directory, add all files in the directory
+                                    for entry in walkdir::WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+                                        let file_path = entry.path();
+                                        if file_path.is_file() {
+                                            index.add_path(file_path.strip_prefix(path.parent().unwrap_or_else(|| Path::new(""))).unwrap()).unwrap(); // Handle this unwrap properly
+                                        }
+                                    }
+                                } else {
+                                    // If the path is a file, just add it
+                                    index.add_path(path).unwrap(); // Handle this unwrap properly
+                                }
+                            } else {
+                                // Handle modified files
+                                index.add_path(path).unwrap(); // Handle this unwrap properly
+                            }
+                        }
+                        index.write().unwrap(); // Handle this unwrap properly
+
+                        // Step 3: Commit changes
+                        let oid = index.write_tree().unwrap(); // Handle this unwrap properly
+                        let signature = repo.signature().unwrap(); // Handle this unwrap properly
+                        let parent_commit = find_last_commit(&repo).unwrap(); // Function to find the last commit
+                        let tree = repo.find_tree(oid).unwrap(); // Handle this unwrap properly
+                        let full_commit_message = format!("{}: {}\n\nThis commit originated from ActionAllegro", self.config.name, self.commit_message);
+                        repo.commit(Some("HEAD"), &signature, &signature, &full_commit_message, &tree, &[&parent_commit]).unwrap(); // Handle this unwrap properly
+
+                        // Step 4: Push the commit
+                        if let Err(e) = push_repo(repo_path, &self.decrypted_github_pat) {
+                            self.error_message = Some(format!("Failed to push changes: {}", e));
+                            self.check_repo_status();
+                        } else {
+                            self.info_message = Some("Changes uploaded successfully".to_string());
+                            self.check_repo_status();
+                        }
+                    }
+                },
+                Err(e) => self.error_message = Some(format!("Failed to open repository: {}", e)),
+            }
+        } else {
+            self.error_message = Some("Repository path is not set".to_string());
+        }
+    }
+
 
     fn show_action_details_window(&mut self, ctx: &egui::Context) {
         if let Some(action) = &self.action_detail_window_open {
@@ -623,6 +699,7 @@ impl TemplateApp {
                             self.folders = self.config.folders.clone();
                             self.salt = self.config.salt.clone();
                             self.hashed_password = self.config.hashed_password.clone();
+                            self.repo_path = self.config.repo_path.clone();
                         },
                         Err(e) => println!("Failed to deserialize config: {}", e),
                     }
@@ -657,6 +734,7 @@ impl TemplateApp {
             println!("Encrypted GitHub PAT: {:?}", encrypted_github_pat);
             println!("test on label: {}", self.config.repo_name);
             println!("temp_password: {}", self.temp_password);
+            println!("repo path: {:?}", self.config.repo_path.clone());
 
             let config = AppConfig {
                 folders: self.folders.clone(),
@@ -675,6 +753,8 @@ impl TemplateApp {
                         println!("Failed to write config to file: {}", e);
                     } else {
                         println!("Config exported to {:?}", file_path);
+                        // self.config.repo_path = Some(file_path.into_os_string().into_string().unwrap()); // Save the repo path
+                        println!("repo path 2: {:?}", self.config.repo_path);
                     }
                 },
                 Err(e) => println!("Failed to serialize config: {}", e),
@@ -807,7 +887,7 @@ impl eframe::App for TemplateApp {
 
                 // Horizontal layout for heading and button
                 ui.horizontal(|ui| {
-                    ui.heading("Actions Organizer");
+                    ui.heading("ActionAllegro");
                     // Enable button if a repository is loaded
                     if ui.add_enabled(can_export, egui::Button::new("Export Config")).clicked() {
                         self.export_config();
@@ -996,111 +1076,131 @@ impl eframe::App for TemplateApp {
                         });
                     },
                     AppTab::Pull => {
+                        if self.last_git_time.elapsed() >= self.auto_git_interval {
+                            self.check_repo_status(); // Check the repo status
+                        }
                         ui.separator();
-                        ui.vertical_centered(|ui| {
-                            if ui.button("Pull Repository").clicked() {
-                                println!("Pulling repository: {}", self.config.repo_name);
-                                if self.config.repo_name.is_empty() || self.decrypted_github_pat.is_empty() {
-                                    self.error_message = Some("Please configure the repository and GitHub PAT before pulling.".to_string());
-                                } else {
-                                    self.error_message = None;
-                                    if let Some(repo_location) = pick_folder_location() {
-                                        // Check if repository already exists
-                                        match Repository::open(&repo_location) {
-                                            Ok(_) => {
-                                                println!("Repository already exists at the selected location.");
-                                                self.error_message = Some("Repository already exists at the selected location.".to_string());
-                                                // You can implement further logic here, like fetching updates
-                                            },
-                                            Err(_) => {
-                                                self.config.repo_path = Some(repo_location.clone()); // Save the repo path
-                                                // Repository does not exist, attempt to clone
-                                                match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &self.config.repo_path) {
-                                                    Ok(_) => {
-                                                        println!("Repository cloned successfully.");
-                                                        self.check_repo_status();
-                                                        self.config.repo_path = Some(repo_location); // Save the repo path
-                                                    },
-                                                    Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                        ui.horizontal_top(|ui| {
+                            ui.horizontal_top(|ui| {
+                                if ui.add_sized([120.0, 40.0], egui::Button::new("Pull Repository")).clicked() {
+                                    println!("Pulling repository: {}", self.config.repo_name);
+                                    if self.config.repo_name.is_empty() || self.decrypted_github_pat.is_empty() {
+                                        self.error_message = Some("Please configure the repository and GitHub PAT before pulling.".to_string());
+                                    } else {
+                                        self.error_message = None;
+                                        if let Some(repo_location) = pick_folder_location() {
+                                            // Check if repository already exists
+                                            match Repository::open(&repo_location) {
+                                                Ok(_) => {
+                                                    println!("Repository already exists at the selected location.");
+                                                    self.error_message = Some("Repository already exists at the selected location.".to_string());
+                                                    // You can implement further logic here, like fetching updates
+                                                },
+                                                Err(_) => {
+                                                    self.config.repo_path = Some(repo_location.clone()); // Save the repo path
+                                                    // Repository does not exist, attempt to clone
+                                                    match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &self.config.repo_path) {
+                                                        Ok(_) => {
+                                                            println!("Repository cloned successfully.");
+                                                            // self.repo_path = Path::new(repo_location.clone());
+                                                            // println!("Repo path: {:?}", self.repo_path);
+                                                            self.check_repo_status();
+                                                            self.config.repo_path = Some(repo_location); // Save the repo path
+                                                            println!("repo path 2: {:?}", self.config.repo_path);
+                                                        },
+                                                        Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            // Display the error message if it's set
-                            if let Some(ref message) = self.error_message {
-                                ui.colored_label(egui::Color32::RED, message);
-                            }
-                        });
-                        ui.vertical_centered(|ui| {
-                            if ui.button("Upload Repository").clicked() {
-                                self.show_commit_message_input = true;
-                                // Use a local variable to determine if the window should be closed
-                                let mut close_window = false;
+                                // Display the error message if it's set
+                                if let Some(ref message) = self.error_message {
+                                    ui.colored_label(egui::Color32::RED, message);
+                                }
+                            });
+                            ui.horizontal_top(|ui| {
+                                let mut show_commit_window = self.show_commit_message_input;
+                                let mut commit_and_push_clicked = false;
 
-                                if self.show_commit_message_input {
+                                if ui.add_sized([120.0, 40.0], egui::Button::new("Upload Repository")).clicked() {
+                                    show_commit_window = true;
+                                }
+
+                                if show_commit_window {
                                     egui::Window::new("Commit Changes")
-                                        .open(&mut self.show_commit_message_input)
+                                        .open(&mut show_commit_window)
                                         .show(ctx, |ui| {
                                             ui.text_edit_singleline(&mut self.commit_message);
                                             if ui.button("Commit & Push").clicked() {
-                                                // The logic for committing and pushing goes here
-                                                // Use self.commit_message as the commit message
-                                                close_window = true;
+                                                commit_and_push_clicked = true;
                                             }
                                         });
-                                }
 
-                                if close_window {
-                                    self.show_commit_message_input = false;
-                                }
-                                if let Some(ref repo_path) = self.config.repo_path {
-                                    match Repository::open(repo_path) {
-                                        Ok(repo) => {
-                                            // Step 1: Check if there are changes
-                                            let statuses = repo.statuses(None).unwrap(); // handle this unwrap properly
-                                            if statuses.is_empty() {
-                                                self.info_message = Some("No changes to upload".to_string());
-                                            } else {
-                                                // Step 2: Stage changes
-                                                let mut index = repo.index().unwrap(); // handle this unwrap properly
-                                                for entry in statuses.iter() {
-                                                    let path = entry.path().unwrap(); // handle this unwrap properly
-                                                    index.add_path(Path::new(path)).unwrap(); // handle this unwrap properly
-                                                }
-                                                index.write().unwrap(); // handle this unwrap properly
-
-                                                // Step 3: Commit changes
-                                                let oid = index.write_tree().unwrap(); // handle this unwrap properly
-                                                let signature = repo.signature().unwrap(); // handle this unwrap properly
-                                                let parent_commit = find_last_commit(&repo).unwrap(); // function to find the last commit
-                                                let tree = repo.find_tree(oid).unwrap(); // handle this unwrap properly
-                                                let full_commit_message = format!("{}: {}\n\nThis commit originated from ActionAllegro", self.commit_message, self.config.name);
-                                                // Inside your logic for committing and pushing
-                                                repo.commit(Some("HEAD"), &signature, &signature, &*full_commit_message, &tree, &[&parent_commit]).unwrap(); // handle this unwrap properly
-
-                                                // Step 4: Push the commit
-                                                if let Err(e) = push_repo(repo_path, &self.decrypted_github_pat) {
-                                                    self.error_message = Some(format!("Failed to push changes: {}", e));
-                                                    self.check_repo_status();
-                                                } else {
-                                                    self.info_message = Some("Changes uploaded successfully".to_string());
-                                                    self.check_repo_status();
-                                                }
-                                            }
-                                        },
-                                        Err(e) => self.error_message = Some(format!("Failed to open repository: {}", e)),
+                                    if commit_and_push_clicked {
+                                        if !self.commit_message.is_empty() {
+                                            self.handle_commit_and_push();
+                                            show_commit_window = false; // Close the window
+                                        } else {
+                                            // Display error message
+                                        }
                                     }
                                 }
-                            }
+
+                                self.show_commit_message_input = show_commit_window;
+                            });
                         });
+                        ui.separator();
                         ui.vertical_centered(|ui| {
                             // Display the repository status
                             match self.repo_status {
-                                RepoStatus::NotCloned => ui.label("No repo cloned"),
-                                RepoStatus::UpToDate => ui.label("Repo cloned and up to date"),
-                                RepoStatus::ChangesMade => ui.label("Changes made to repo since last upload"),
+                                RepoStatus::NotCloned => ui.heading("No repo cloned"),
+                                RepoStatus::UpToDate => ui.heading("Repo cloned and up to date"),
+                                RepoStatus::ChangesMade => {
+                                    ui.heading("Changes made to repo since last upload:");
+
+                                    // Check if repo_path is Some and convert to Path
+                                    if let Some(ref repo_path_str) = self.config.repo_path {
+                                        let repo_path = Path::new(repo_path_str);
+                                        // Open the repository
+                                        if let Ok(repo) = Repository::open(repo_path) {
+                                            let mut opts = StatusOptions::new();
+                                            opts.show(StatusShow::IndexAndWorkdir);
+                                            opts.include_untracked(true);
+
+                                            if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
+                                                for entry in statuses.iter() {
+                                                    let status = entry.status();
+                                                    let path_str = entry.path().unwrap_or(""); // Handle unwrap properly
+                                                    let path = Path::new(path_str);
+
+                                                    if status.is_index_new() || status.is_wt_new() {
+                                                        if path.is_dir() {
+                                                            // If it's a directory, list all files within it
+                                                            for entry in walkdir::WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+                                                                let file_path = entry.path();
+                                                                if file_path.is_file() {
+                                                                    ui.label(format!("New file: {}", file_path.display()));
+                                                                }
+                                                            }
+                                                        } else {
+                                                            ui.label(format!("New file: {}", path_str));
+                                                        }
+                                                    } else if status.is_index_modified() || status.is_wt_modified() {
+                                                        ui.label(format!("Modified: {}", path_str));
+                                                    } else if status.is_index_deleted() || status.is_wt_deleted() {
+                                                        ui.label(format!("Deleted: {}", path_str));
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            ui.label("Failed to open repository");
+                                        }
+                                    } else {
+                                        ui.label("Repository path is not set");
+                                    } ui.label("")
+                                }
                                 // ... handle other statuses ...
                             }
                         });

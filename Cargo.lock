@@ -3,6 +3,35 @@
 version = 3
 
 [[package]]
+name = "ActionAllegro"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64 0.21.5",
+ "block-padding",
+ "cbc",
+ "cipher",
+ "directories",
+ "eframe",
+ "egui",
+ "env_logger",
+ "git2",
+ "hmac",
+ "log",
+ "pbkdf2",
+ "rand",
+ "reqwest",
+ "rfd",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tokio",
+ "walkdir",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -89,34 +118,6 @@ dependencies = [
  "accesskit_unix",
  "accesskit_windows",
  "winit",
-]
-
-[[package]]
-name = "actions_organizer"
-version = "0.1.0"
-dependencies = [
- "aes",
- "base64 0.21.5",
- "block-padding",
- "cbc",
- "cipher",
- "directories",
- "eframe",
- "egui",
- "env_logger",
- "git2",
- "hmac",
- "log",
- "pbkdf2",
- "rand",
- "reqwest",
- "rfd",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tokio",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -3105,9 +3106,9 @@ checksum = "9d5b2c62b4012a3e1eca5a7e077d13b3bf498c4073e33ccd58626607748ceeca"
 
 [[package]]
 name = "walkdir"
-version = "2.3.3"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36df944cda56c7d8d8b7496af378e6b16de9284591917d307c9b4d313c44e698"
+checksum = "d71d857dc86794ca4c280d616f7da00d2dbfd8cd788846559a6813e6aa4b54ee"
 dependencies = [
  "same-file",
  "winapi-util",
