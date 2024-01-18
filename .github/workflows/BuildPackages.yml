@@ -20,7 +20,7 @@ jobs:
     # Set an environment variable based on the OS
     env:
       DEPENDS_SETUP: ${{ (matrix.os == 'ubuntu-latest' && 'true') || 'false' }}
-      ARTIFACT_NAME: ${{ (matrix.os == 'windows-latest' && 'actions_organizer.exe') || 'actions_organizer' }}
+      ARTIFACT_NAME: ${{ (matrix.os == 'windows-latest' && 'ActionAllegro.exe') || 'ActionAllegro' }}
 
     steps:
       - name: Setup | Checkout
