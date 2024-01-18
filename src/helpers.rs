@@ -3,7 +3,6 @@ use reqwest;
 use serde_json::{json, Value};
 use std::error::Error;
 use std::path::Path;
-use egui::Id;
 use git2;
 use git2::{Commit, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository};
 use git2::build::RepoBuilder;
@@ -115,7 +114,7 @@ pub fn push_repo(repo_path: &str, api_key: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn find_last_commit(repo: &Repository) -> Result<Commit, Box<dyn Error>> {
+pub fn find_last_commit(repo: &Repository) -> Result<Commit<'_>, Box<dyn Error>> {
     // First look up the HEAD of the repository
     let head = repo.head()?;
 
@@ -192,42 +191,3 @@ pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, inputs: Op
         Err(error_msg.into())
     }
 }
-
-// fn check_repo_status(&mut self) {
-//     let repo_path = match self.config.repo_path.as_ref() {
-//         Some(path) => path,
-//         None => {
-//             self.repo_status = RepoStatus::NotCloned;
-//             return;
-//         }
-//     };
-//
-//     // Open the repository
-//     match Repository::open(repo_path) {
-//         Ok(repo) => {
-//             let mut opts = StatusOptions::new();
-//             opts.show(StatusShow::IndexAndWorkdir);
-//             opts.include_untracked(true);
-//             opts.renames_head_to_index(true);
-//             opts.renames_index_to_workdir(true);
-//
-//             match repo.statuses(Some(&mut opts)) {
-//                 Ok(statuses) => {
-//                     if statuses.is_empty() {
-//                         self.repo_status = RepoStatus::UpToDate;
-//                     } else {
-//                         self.repo_status = RepoStatus::ChangesMade;
-//                     }
-//                 }
-//                 Err(e) => {
-//                     eprintln!("Failed to retrieve repository statuses: {}", e);
-//                     // Handle error appropriately
-//                 }
-//             }
-//         }
-//         Err(e) => {
-//             eprintln!("Failed to open repository: {}", e);
-//             // Handle error appropriately
-//         }
-//     }
-// }

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow};
-use egui::{CollapsingHeader, Color32, RichText, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint, vec2, Label, SidePanel, CentralPanel};
-use serde::{Serialize, Deserialize};
+use egui::{TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
 use std::fs;
 use serde_json;
 use rfd::FileDialog;
@@ -16,19 +15,14 @@ use aes::Aes128;
 use cbc::{Encryptor as Aes128CbcEnc, Decryptor as Aes128CbcDec};
 use block_padding::Pkcs7;
 use aes::cipher::{KeyIvInit, BlockEncryptMut, BlockDecryptMut};
-use pbkdf2::{pbkdf2_hmac, pbkdf2_hmac_array};
 use hmac::Hmac;
 use pbkdf2::pbkdf2;
-// use hmac::{Hmac, Mac, NewMac};
-// type Aes128Cbc = Cbc<Aes128, Pkcs7>;
-// Function to derive a key from the password
-// Function to derive a key from the password
-fn derive_key(password: &[u8], output: &mut [u8]) {
-    let pbkdf2_iterations = 100_000; // Number of iterations, adjust as needed
-    let salt = b"some-fixed-salt"; // Ideally, use a fixed salt
-
-    pbkdf2::<Hmac<Sha256>>(password, salt, pbkdf2_iterations, output);
-}
+// fn derive_key(password: &[u8], output: &mut [u8]) {
+//     let pbkdf2_iterations = 100_000; // Number of iterations, adjust as needed
+//     let salt = b"some-fixed-salt"; // Ideally, use a fixed salt
+//
+//     pbkdf2::<Hmac<Sha256>>(password, salt, pbkdf2_iterations, output);
+// }
 
 fn derive_key_iv(password: &[u8]) -> ([u8; 16], [u8; 16]) {
     let pbkdf2_iterations = 100_000; // Number of iterations, adjust as needed
@@ -318,7 +312,7 @@ impl Default for TemplateApp {
 impl TemplateApp {
 
     /// Called once before the first frame.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Initialize with default values
         let mut app = Self::default();
 
@@ -462,10 +456,9 @@ impl TemplateApp {
 
 
     fn show_action_details_window(&mut self, ctx: &egui::Context) {
-        if let Some(action) = &self.action_detail_window_open {
+        if let Some(_action) = &self.action_detail_window_open {
             // Check if the workflow details are already fetched
             let mut window_title = "Action Details".to_string();
-            let mut is_window_open = true;
             if self.opened_workflow_details.is_none() {
                 // Check if there is an opened action ID
                 if let Some(action_id) = self.opened_action_id {
@@ -537,7 +530,7 @@ impl TemplateApp {
                                     match serde_json::from_str::<JsonValue>(details_str) {
                                         Ok(workflow_details) => {
                                             // Proceed with extracting the workflow file path
-                                            if let Some(path) = workflow_details["path"].as_str() {
+                                            if let Some(_path) = workflow_details["path"].as_str() {
                                                 // ... rest of your code ...
                                             }
                                         },
@@ -568,7 +561,7 @@ impl TemplateApp {
             egui::Window::new(window_title)
                 .open(&mut is_window_open)
                 .show(ctx, |ui| {
-                    if let Some(details) = &self.opened_workflow_details {
+                    if let Some(_details) = &self.opened_workflow_details {
                         if let Some(ref details_str) = self.opened_workflow_details {
                             match serde_json::from_str::<serde_json::Value>(details_str) {
                                 Ok(workflow_details) => {
@@ -625,7 +618,6 @@ impl TemplateApp {
                                                     ui.label(description);
                                                 }
 
-                                                let mut input_value = String::new();
                                                 match input_details.input_type.as_str() {
                                                     "choice" => {
                                                         if let Some(options) = &input_details.options {
@@ -883,7 +875,6 @@ impl eframe::App for TemplateApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 // Intro and repository info at the top
                 let can_export = !self.label.is_empty(); // 'true' if a repo is loaded
-                let config_dir = self.config_dir.clone();
 
                 // Horizontal layout for heading and button
                 ui.horizontal(|ui| {
@@ -1071,7 +1062,6 @@ impl eframe::App for TemplateApp {
 
 
                         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                            powered_by_egui_and_eframe(ui);
                             egui::warn_if_debug_build(ui);
                         });
                     },

@@ -2,11 +2,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 mod helpers;
 
+use std::path::Path;
+use winit::{window::Icon};
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon-256.png");
 
+    let icon = load_icon(Path::new(path));
 
 
     let native_options = eframe::NativeOptions {
@@ -19,6 +23,18 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| Box::new(ActionAllegro::TemplateApp::new(cc))),
     )
+}
+
+fn load_icon(path: &Path) -> Icon {
+    let (icon_rgba, icon_width, icon_height) = {
+        let image = image::open(path)
+            .expect("Failed to open icon path")
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        let rgba = image.into_raw();
+        (rgba, width, height)
+    };
+    Icon::from_rgba(icon_rgba, icon_width, icon_height).expect("Failed to open icon")
 }
 
 // When compiling to web using trunk:
