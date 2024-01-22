@@ -65,6 +65,7 @@ type YamlValue = serde_yaml::Value;
 enum AppTab {
     Organize,
     Pull,
+    Confirm,
     // Add more tabs as needed
 }
 
@@ -944,6 +945,12 @@ impl eframe::App for TemplateApp {
                         self.check_repo_status();
                         self.current_tab = AppTab::Pull;
                     }
+
+                    // Tab for "Confirm Changes"
+                    if ui.selectable_label(self.current_tab == AppTab::Confirm, "Confirm Changes").clicked() {
+                        self.check_repo_status();
+                        self.current_tab = AppTab::Confirm;
+                    }
                     // Add more tabs as needed
                 });
 
@@ -1196,6 +1203,12 @@ impl eframe::App for TemplateApp {
                         });
                         // ... rest of the Pull tab UI ...
                     },
+                    AppTab::Confirm => {
+                        ui.separator();
+                        ui.label("Review and Confirm Terraform Changes:");
+                        ui.separator();
+
+                    }
 
                     // Handle other tabs...
                 }
