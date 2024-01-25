@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs};
+use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response};
 use egui::{TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
 use std::fs;
 use serde_json;
@@ -153,6 +153,7 @@ pub struct TemplateApp {
     drift_info: Option<String>,
     is_ready_to_fetch_jobs: bool,
     show_job_details_window: bool,
+    clicked_job_id: Option<String>,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -305,7 +306,7 @@ impl Default for TemplateApp {
             last_save_time: Instant::now(),
             auto_save_interval: Duration::from_secs(30),
             last_git_time: Instant::now(),
-            auto_git_interval: Duration::from_secs(2),
+            auto_git_interval: Duration::from_secs(10),
             opened_workflow_details: None,
             parsed_workflow_yaml: None,
             selected_option: String::new(),
@@ -339,6 +340,7 @@ impl Default for TemplateApp {
             drift_info: None,
             is_ready_to_fetch_jobs: false,
             show_job_details_window: false,
+            clicked_job_id: None,
 
 
             columns: vec![
@@ -429,12 +431,12 @@ impl TemplateApp {
 
 
     fn fetch_and_parse_jobs(&mut self) {
-        println!("Pending jobs before parsing: {:?}", self.pending_jobs); // Debug print
+        // println!("Pending jobs before parsing: {:?}", self.pending_jobs); // Debug print
         self.fetched_jobs.clear();
 
         for job in &self.pending_jobs {
             if let Some((id, job_info)) = job.split_once(": ") {
-                println!("Parsing job: {}, {}", id, job_info); // Debug print
+                // println!("Parsing job: {}, {}", id, job_info); // Debug print
                 if let Ok(parsed_info) = serde_json::from_str::<serde_json::Value>(job_info) {
                     if let Some(job_name) = parsed_info["job_name"].as_str() {
                         self.fetched_jobs.entry(job_name.to_string()).or_default().push(id.to_string());
@@ -442,13 +444,12 @@ impl TemplateApp {
                 }
             }
         }
-        println!("Fetched jobs after parsing: {:?}", self.fetched_jobs); // Debug print
+        // println!("Fetched jobs after parsing: {:?}", self.fetched_jobs); // Debug print
     }
 
 
     // New method to handle the UI display logic
     fn display_confirm_ui(&mut self, ui: &mut egui::Ui) {
-        println!("Displaying Confirm UI");
         ui.separator();
         ui.heading("Review and Confirm Terraform Changes:");
         ui.separator();
@@ -489,17 +490,21 @@ impl TemplateApp {
         });
 
         // Display a new window for job details if a job name was clicked
+// Display a new window for job details if a job name was clicked
         if self.show_job_details_window {
             if let Some(selected_job) = &self.selected_job_name {
-                // Extract job IDs before the closure
                 let job_ids = self.fetched_jobs.get(selected_job).cloned().unwrap_or_default();
+
+                // Cloning necessary data to be used inside the closure
+                let action_api_key = self.action_api_key.clone();
+                let action_listener_url = self.action_listener_url.clone();
 
                 egui::Window::new(format!("Details for job: {}", selected_job))
                     .show(ui.ctx(), |ui| {
                         for job_id in &job_ids {
                             if ui.button(format!("Job ID: {}", job_id)).clicked() {
-                                // Fetch and display the drift info
-                                self.fetch_drift_info(job_id);
+                                self.fetch_drift_info(job_id); // Fetch drift info when a job ID is clicked
+                                self.clicked_job_id = Some(job_id.clone()); // Capture the clicked job ID
                             }
                         }
 
@@ -508,47 +513,67 @@ impl TemplateApp {
                             ui.label(drift_info);
 
                             // User decision buttons
-                            if ui.button("Approve").clicked() {
-                                // Logic for when the 'Approve' button is clicked
-                                println!("User decided to approve for Job ID: {:?}", self.selected_job_name);
-                                // TODO: Implement logic to send this decision to the server
-                            }
+                            if let Some(job_id) = &self.clicked_job_id {
+                                if ui.button("Approve").clicked() {
+                                    println!("User decided to approve for Job ID: {}", job_id);
+                                    if let Err(e) = job_response(job_id, "Approve", &action_api_key, &action_listener_url) {
+                                        println!("Error sending approval: {}", e);
+                                    }
+                                }
 
-                            if ui.button("Reject").clicked() {
-                                // Logic for when the 'Reject' button is clicked
-                                println!("User decided to reject for Job ID: {:?}", self.selected_job_name);
-                                // TODO: Implement logic to send this decision to the server
+                                if ui.button("Reject").clicked() {
+                                    println!("User decided to reject for Job ID: {}", job_id);
+                                    if let Err(e) = job_response(job_id, "Reject", &action_api_key, &action_listener_url) {
+                                        println!("Error sending rejection: {}", e);
+                                    }
+                                }
                             }
                         }
+
                         // Add a close button
                         if ui.button("Close").clicked() {
                             self.show_job_details_window = false;
                             self.selected_job_name = None;
                             self.drift_info = None;
+                            self.clicked_job_id = None; // Reset clicked job ID
                         }
                     });
+
             }
         }
     }
 
     fn fetch_drift_info(&mut self, job_id: &str) {
-        // Here, you need to implement the logic to fetch the drift info
-        // For example, it could be an API call or a lookup in a stored data structure
-        // For this example, I'm just setting a static string
-        self.drift_info = Some(format!("Drift info for job ID {}: Example drift info", job_id));
+        // Search for the job in self.pending_jobs by job_id
+        if let Some(job) = self.pending_jobs.iter().find(|job| job.starts_with(job_id)) {
+            // Extract the drift info from the job string
+            if let Some((_, job_info)) = job.split_once(": ") {
+                if let Ok(parsed_info) = serde_json::from_str::<serde_json::Value>(job_info) {
+                    if let Some(drift_info) = parsed_info["drift_info"].as_str() {
+                        self.drift_info = Some(drift_info.to_string());
+                    } else {
+                        self.drift_info = Some("Drift info not available for this job.".to_string());
+                    }
+                } else {
+                    self.drift_info = Some("Failed to parse job information.".to_string());
+                }
+            } else {
+                self.drift_info = Some("Job format is incorrect.".to_string());
+            }
+        } else {
+            self.drift_info = Some("Job ID not found.".to_string());
+        }
     }
+
     fn update_and_parse_jobs(&mut self) {
         let mut jobs_to_parse = None;
         let mut fetch_error = None;
-        println!("Updating and parsing jobs...");
-        println!("Pending jobs: {:?}", self.pending_jobs); // Debug print
 
         if let Some(result_arc) = &self.pending_jobs_result {
             let mut result = result_arc.lock().unwrap();
             if let Some(res) = result.take() { // Take the result and reset to None
                 match res {
                     Ok(jobs) => {
-                        println!("Fetched jobs: {:?}", jobs);
                         jobs_to_parse = Some(jobs);
                     },
                     Err(e) => {
@@ -559,8 +584,6 @@ impl TemplateApp {
         }
 
         if let Some(jobs) = jobs_to_parse {
-            println!("Fetched jobs: {:?}", jobs);
-            println!("Calling parse_fetched_jobs");
             self.pending_jobs = jobs;
             self.parse_fetched_jobs();
             self.fetch_and_parse_jobs();
@@ -575,7 +598,6 @@ impl TemplateApp {
 
     fn parse_fetched_jobs(&mut self) {
         self.fetched_jobs.clear();
-        println!("Parsing jobs: {:?}", self.pending_jobs); // Add this line for debugging
         for job in &self.pending_jobs {
             if let Some((id, job_info)) = job.split_once(": ") {
                 let job_name = serde_json::from_str::<serde_json::Value>(job_info)

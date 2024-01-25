@@ -215,3 +215,32 @@ pub fn fetch_pending_jobs(shared_result: Arc<Mutex<Option<Result<Vec<String>, St
     *shared_data = Some(result);
 }
 
+pub fn job_response(
+    job_id: &str,
+    user_decision: &str,
+    api_key: &str,
+    action_listener_url: &str,
+) -> Result<(), String> {
+    // Prepare the client and the request body
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    let payload = json!({
+        "decision": user_decision
+    });
+
+    // Send the POST request
+    let response = client.post(&format!("{}/post-user-decision/{}", action_listener_url, job_id))
+        .header("X-API-KEY", api_key)
+        .json(&payload)
+        .send()
+        .map_err(|e| e.to_string())?;
+
+    // Process the response
+    match response.status().is_success() {
+        true => Ok(()),
+        false => Err(format!("Failed to send user decision: {}", response.status())),
+    }
+}
