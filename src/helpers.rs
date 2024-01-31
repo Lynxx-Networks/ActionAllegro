@@ -6,6 +6,8 @@ use std::path::Path;
 use git2;
 use git2::{Commit, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository};
 use git2::build::RepoBuilder;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 pub fn get_actions(repo: &str, token: &str) -> Result<HashMap<String, u64>, Box<dyn Error>> {
     println!("Fetching actions for repository: {}", repo);
@@ -189,5 +191,56 @@ pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, inputs: Op
     } else {
         let error_msg = response.text()?;
         Err(error_msg.into())
+    }
+}
+
+
+pub fn fetch_pending_jobs(shared_result: Arc<Mutex<Option<Result<Vec<String>, String>>>>, api_key: String, action_listener_url: String) {
+    // Existing code to perform the fetch operation...
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    let response = client.get(&format!("{}/get-pending-jobs", action_listener_url))
+        .header("X-API-KEY", api_key)
+        .send();
+
+    let result = match response {
+        Ok(res) => res.json::<Vec<String>>().map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string())
+    };
+
+    let mut shared_data = shared_result.lock().unwrap();
+    *shared_data = Some(result);
+}
+
+pub fn job_response(
+    job_id: &str,
+    user_decision: &str,
+    api_key: &str,
+    action_listener_url: &str,
+) -> Result<(), String> {
+    // Prepare the client and the request body
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    let payload = json!({
+        "decision": user_decision
+    });
+
+    // Send the POST request
+    let response = client.post(&format!("{}/post-user-decision/{}", action_listener_url, job_id))
+        .header("X-API-KEY", api_key)
+        .json(&payload)
+        .send()
+        .map_err(|e| e.to_string())?;
+
+    // Process the response
+    match response.status().is_success() {
+        true => Ok(()),
+        false => Err(format!("Failed to send user decision: {}", response.status())),
     }
 }

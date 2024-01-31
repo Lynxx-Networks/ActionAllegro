@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow};
+use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response};
 use egui::{TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
 use std::fs;
 use serde_json;
 use rfd::FileDialog;
+use base64::decode;
 use git2::{Repository, StatusOptions, StatusShow};
 use serde_yaml::Value;
 use directories::ProjectDirs;
@@ -17,6 +18,9 @@ use block_padding::Pkcs7;
 use aes::cipher::{KeyIvInit, BlockEncryptMut, BlockDecryptMut};
 use hmac::Hmac;
 use pbkdf2::pbkdf2;
+use std::cell::RefCell;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 // fn derive_key(password: &[u8], output: &mut [u8]) {
 //     let pbkdf2_iterations = 100_000; // Number of iterations, adjust as needed
 //     let salt = b"some-fixed-salt"; // Ideally, use a fixed salt
@@ -65,6 +69,7 @@ type YamlValue = serde_yaml::Value;
 enum AppTab {
     Organize,
     Pull,
+    Confirm,
     // Add more tabs as needed
 }
 
@@ -99,6 +104,7 @@ pub struct TemplateApp {
     actions: HashMap<String, u64>, // Store the names of GitHub Actions here
     display_actions: bool, // Flag to indicate whether to display actions
     error_message: Option<String>,
+    confirm_error: Option<String>,
     info_message: Option<String>,
     columns: Vec<Vec<String>>,
     folders: HashMap<String, Vec<String>>,
@@ -136,6 +142,19 @@ pub struct TemplateApp {
     encoded_github_pat: String,
     decrypted_github_pat: String,
     repo_path: Option<String>,
+    //Action Listener vars
+    action_listener_url: String,
+    action_api_key: String,
+    pending_jobs: Vec<String>,  // List of pending job names
+    selected_job: Option<String>,
+    fetched_jobs: HashMap<String, Vec<String>>, // Map of job names to job IDs
+    selected_job_name: Option<String>,
+    selected_job_ids: Vec<String>,
+    pending_jobs_result: Option<Arc<Mutex<Option<Result<Vec<String>, String>>>>>,
+    drift_info: Option<String>,
+    is_ready_to_fetch_jobs: bool,
+    show_job_details_window: bool,
+    clicked_job_id: Option<String>,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -152,6 +171,8 @@ struct AppConfig {
     name: String,
     salt: Option<String>,
     hashed_password: Option<String>,
+    action_listener_url: String,
+    action_api_key: String,
 }
 
 fn pick_file_location() -> Option<String> {
@@ -246,6 +267,12 @@ impl Default for TemplateApp {
         let config_dir = ProjectDirs::from("com", "3rtNetworks", "ActionAllegro")
             .map(|proj_dirs| proj_dirs.config_dir().to_path_buf().display().to_string());
 
+        let action_listener_url = String::new();  // Initialize action_listener_url
+        let api_key = String::new();  // Initialize api_key
+
+        // Now you can use action_listener_url and api_key
+        // let pending_jobs_result = Some(fetch_pending_jobs(api_key.clone(), action_listener_url.clone()));
+
         Self {
             label: "myuser/myrepo".to_owned(),
             label2: "ghp_sdfjkh238hdsklsdjf983nldfejfds".to_owned(),
@@ -253,6 +280,7 @@ impl Default for TemplateApp {
             actions: HashMap::new(), // Store the names of GitHub Actions here
             display_actions: false, // Flag to indicate whether to display actions
             error_message: None,
+            confirm_error: None,
             info_message: None,
             current_tab: AppTab::Organize,
             folders: HashMap::new(),
@@ -270,6 +298,8 @@ impl Default for TemplateApp {
                 name: String::new(),
                 salt: None,
                 hashed_password: None,
+                action_listener_url: String::new(),
+                action_api_key: String::new(),
                 // ... initialize other fields ...
             },
             action_detail_window_open: None,
@@ -277,7 +307,7 @@ impl Default for TemplateApp {
             last_save_time: Instant::now(),
             auto_save_interval: Duration::from_secs(30),
             last_git_time: Instant::now(),
-            auto_git_interval: Duration::from_secs(2),
+            auto_git_interval: Duration::from_secs(10),
             opened_workflow_details: None,
             parsed_workflow_yaml: None,
             selected_option: String::new(),
@@ -299,6 +329,21 @@ impl Default for TemplateApp {
             encoded_github_pat: String::new(),
             decrypted_github_pat: String::new(),
             repo_path: None,
+            //Action Listener vars
+            action_listener_url,
+            action_api_key: api_key,
+            pending_jobs: Vec::new(),
+            selected_job: None,
+            fetched_jobs: HashMap::new(),
+            selected_job_name: None,
+            selected_job_ids: Vec::new(),
+            pending_jobs_result: Some(Arc::new(Mutex::new(None))),
+            drift_info: None,
+            is_ready_to_fetch_jobs: false,
+            show_job_details_window: false,
+            clicked_job_id: None,
+
+
             columns: vec![
                 vec!["Item A", "Item B", "Item C"],
                 vec!["Item D", "Item E"],
@@ -348,6 +393,244 @@ impl TemplateApp {
         } else {
             false
         }
+    }
+
+    // New method to handle the logic of starting the fetch operation
+    fn start_pending_jobs_fetch(&mut self) {
+        if let Some(result_arc) = &self.pending_jobs_result {
+            let maybe_result = {
+                let result = result_arc.lock().unwrap();
+                result.clone() // Clone the result outside the lock scope
+            };
+
+            if let Some(res) = maybe_result {
+                // Process the result outside the lock scope
+                match res {
+                    Ok(jobs) => {
+                        self.pending_jobs = jobs;
+                        self.parse_fetched_jobs(); // Now safe to call without borrowing issues
+                    },
+                    Err(e) => {
+                        self.confirm_error = Some(e);
+                    }
+                }
+            } else {
+                // If no fetch is in progress, start a new fetch
+                let shared_result = result_arc.clone();
+                let api_key = self.action_api_key.clone();
+                let action_listener_url = self.action_listener_url.clone();
+
+                std::thread::spawn(move || {
+                    fetch_pending_jobs(shared_result, api_key, action_listener_url);
+                });
+            }
+        } else {
+            // Initialize pending_jobs_result with a new Arc<Mutex<...>>
+            self.pending_jobs_result = Some(Arc::new(Mutex::new(None)));
+        }
+    }
+
+
+    fn fetch_and_parse_jobs(&mut self) {
+        self.fetched_jobs.clear();
+    
+        for job in &self.pending_jobs {
+            if let Some((id, job_info)) = job.split_once(": ") {
+                // Split the job info into parts
+                let parts: Vec<&str> = job_info.split(" - ").collect();
+                if parts.len() >= 1 {
+                    // The first part is the job name
+                    let job_name = parts[0];
+                    self.fetched_jobs.entry(job_name.to_string()).or_default().push(id.to_string());
+                }
+            }
+        }
+    }
+
+
+    // New method to handle the UI display logic
+    fn display_confirm_ui(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.heading("Review and Confirm Terraform Changes:");
+        ui.separator();
+
+        // Display buttons for job names and handle clicks
+        let mut clicked_job_name = None;
+        for (job_name, _) in &self.fetched_jobs {
+            if ui.button(job_name).clicked() {
+                clicked_job_name = Some(job_name.clone());
+            }
+        }
+
+        if let Some(job_name) = clicked_job_name {
+            self.selected_job_name = Some(job_name.clone());
+            self.show_job_details_window = true;
+        }
+
+        // Check if the fetch operation has timed out or failed
+        if let Some(error_message) = &self.confirm_error {
+            ui.colored_label(egui::Color32::RED, error_message);
+            if ui.button("Refresh").clicked() {
+                self.start_pending_jobs_fetch();
+            }
+        }
+
+        // Add a separate layout group for the spinner and "Loading..." label
+        ui.allocate_space(egui::Vec2::new(0.0, 10.0));
+        ui.horizontal(|ui| {
+            let is_fetching = self.pending_jobs_result
+                .as_ref()
+                .map(|arc| arc.lock().unwrap().is_none())
+                .unwrap_or(false);
+
+            if is_fetching {
+                ui.label("Loading...");
+                ui.spinner();
+            }
+        });
+
+        // Display a new window for job details if a job name was clicked
+// Display a new window for job details if a job name was clicked
+        if self.show_job_details_window {
+            if let Some(selected_job) = &self.selected_job_name {
+                let job_ids = self.fetched_jobs.get(selected_job).cloned().unwrap_or_default();
+
+                // Cloning necessary data to be used inside the closure
+                let action_api_key = self.action_api_key.clone();
+                let action_listener_url = self.action_listener_url.clone();
+
+                egui::Window::new(format!("Details for job: {}", selected_job))
+                    .show(ui.ctx(), |ui| {
+                        for job_id in &job_ids {
+                            if ui.button(format!("Job ID: {}", job_id)).clicked() {
+                                self.fetch_drift_info(job_id); // Fetch drift info when a job ID is clicked
+                                self.clicked_job_id = Some(job_id.clone()); // Capture the clicked job ID
+                            }
+                        }
+
+                        // Display the drift info if it's available
+                        if let Some(drift_info) = &self.drift_info {
+                            ui.label(drift_info);
+
+                            // User decision buttons
+                            if let Some(job_id) = &self.clicked_job_id {
+                                if ui.button("Approve").clicked() {
+                                    println!("User decided to approve for Job ID: {}", job_id);
+                                    if let Err(e) = job_response(job_id, "Approve", &action_api_key, &action_listener_url) {
+                                        println!("Error sending approval: {}", e);
+                                    }
+                                }
+
+                                if ui.button("Deny").clicked() {
+                                    println!("User decided to reject for Job ID: {}", job_id);
+                                    if let Err(e) = job_response(job_id, "Reject", &action_api_key, &action_listener_url) {
+                                        println!("Error sending rejection: {}", e);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Add a close button
+                        if ui.button("Close").clicked() {
+                            self.show_job_details_window = false;
+                            self.selected_job_name = None;
+                            self.drift_info = None;
+                            self.clicked_job_id = None; // Reset clicked job ID
+                        }
+                    });
+
+            }
+        }
+    }
+
+    fn fetch_drift_info(&mut self, job_id: &str) {
+        // Search for the job in self.pending_jobs by job_id
+        if let Some(job) = self.pending_jobs.iter().find(|job| job.starts_with(job_id)) {
+            // Extract the job name and decision from the job string
+            if let Some((_, job_info)) = job.split_once(": ") {
+                let parts: Vec<&str> = job_info.split(" - Decision: ").collect();
+                if parts.len() == 2 {
+                    let job_name = parts[0];
+                    let decision = parts[1];
+    
+                    // Split the decision into the decision and the drift info
+                    let decision_parts: Vec<&str> = decision.split(" - Drift Info: ").collect();
+                    if decision_parts.len() == 2 {
+                        let decision = decision_parts[0];
+    
+                        // Decode the Base64 string
+                        if let Ok(decoded) = decode(decision_parts[1]) {
+                            let decoded_str = String::from_utf8(decoded).unwrap_or_else(|_| "Invalid UTF-8 sequence.".to_string());
+                            self.drift_info = Some(format!("Job Name: {}, Decision: {}, Drift Info: {}", job_name, decision, decoded_str));
+                        } else {
+                            self.drift_info = Some("Failed to decode Base64.".to_string());
+                        }
+                    } else {
+                        self.drift_info = Some("Job format is incorrect.".to_string());
+                    }
+                } else {
+                    self.drift_info = Some("Job format is incorrect.".to_string());
+                }
+            } else {
+                self.drift_info = Some("Job format is incorrect.".to_string());
+            }
+        } else {
+            self.drift_info = Some("Job ID not found.".to_string());
+        }
+    }
+
+    fn update_and_parse_jobs(&mut self) {
+        let mut jobs_to_parse = None;
+        let mut fetch_error = None;
+
+        if let Some(result_arc) = &self.pending_jobs_result {
+            let mut result = result_arc.lock().unwrap();
+            if let Some(res) = result.take() { // Take the result and reset to None
+                match res {
+                    Ok(jobs) => {
+                        jobs_to_parse = Some(jobs);
+                    },
+                    Err(e) => {
+                        fetch_error = Some(e);
+                    }
+                }
+            }
+        }
+
+        if let Some(jobs) = jobs_to_parse {
+            self.pending_jobs = jobs;
+            self.parse_fetched_jobs();
+            self.fetch_and_parse_jobs();
+        }
+
+        if let Some(e) = fetch_error {
+            self.confirm_error = Some(e);
+        }
+    }
+
+
+
+    fn parse_fetched_jobs(&mut self) {
+        self.fetched_jobs.clear();
+        for job in &self.pending_jobs {
+            if let Some((id, job_info)) = job.split_once(": ") {
+                let job_name = serde_json::from_str::<serde_json::Value>(job_info)
+                    .map(|info| info["job_name"].as_str().unwrap_or_default().to_string())
+                    .unwrap_or_default();
+                self.fetched_jobs.entry(job_name).or_default().push(id.to_string());
+            }
+        }
+    }
+    // Function to handle user selection of a job
+    fn on_job_selected(&mut self, job_name: String) {
+        self.selected_job_name = Some(job_name);
+        // Optionally fetch detailed information for this job
+    }
+
+    fn on_job_id_selected(&mut self, job_id: String) {
+        // Display drift info or other details for this job ID
+        println!("Selected job ID: {}", job_id);
+        // Add logic to display or process job-specific information
     }
 
     fn check_repo_status(&mut self) {
@@ -692,6 +975,9 @@ impl TemplateApp {
                             self.salt = self.config.salt.clone();
                             self.hashed_password = self.config.hashed_password.clone();
                             self.repo_path = self.config.repo_path.clone();
+                            self.action_listener_url = self.config.action_listener_url.clone();
+                            self.action_api_key = self.config.action_api_key.clone();
+                            self.is_ready_to_fetch_jobs = true;
                         },
                         Err(e) => println!("Failed to deserialize config: {}", e),
                     }
@@ -736,6 +1022,8 @@ impl TemplateApp {
                 name: self.name.clone(),
                 salt: self.salt.clone(),
                 hashed_password: self.hashed_password.clone(),
+                action_listener_url: self.action_listener_url.clone(),
+                action_api_key: self.action_api_key.clone(),
                 // ... other fields ...
             };
             println!("test on name: {:?}", self.config);
@@ -755,8 +1043,6 @@ impl TemplateApp {
     }
 
 }
-use std::cell::RefCell;
-use std::path::Path;
 
 impl eframe::App for TemplateApp {
     /// Called by the frame work to save state before shutdown.
@@ -899,6 +1185,14 @@ impl eframe::App for TemplateApp {
                     ui.label("What is your Github API Key?: ");
                     ui.add(egui::TextEdit::singleline(&mut self.decrypted_github_pat).password(true));
                 });
+                ui.horizontal(|ui| {
+                    ui.label("What is your listener url?: ");
+                    ui.text_edit_singleline(&mut self.action_listener_url);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("What is your listener api key?: ");
+                    ui.add(egui::TextEdit::singleline(&mut self.action_api_key).password(true));
+                });
                 if ui.button("Fetch Actions").clicked() {
                     self.error_message = None;
                     match get_actions(&self.config.repo_name, &self.decrypted_github_pat) {
@@ -943,6 +1237,12 @@ impl eframe::App for TemplateApp {
                     if ui.selectable_label(self.current_tab == AppTab::Pull, "Pull and Upload").clicked() {
                         self.check_repo_status();
                         self.current_tab = AppTab::Pull;
+                    }
+
+                    // Tab for "Confirm Changes"
+                    if ui.selectable_label(self.current_tab == AppTab::Confirm, "Confirm Changes").clicked() {
+                        self.check_repo_status();
+                        self.current_tab = AppTab::Confirm;
                     }
                     // Add more tabs as needed
                 });
@@ -1196,8 +1496,22 @@ impl eframe::App for TemplateApp {
                         });
                         // ... rest of the Pull tab UI ...
                     },
+                    AppTab::Confirm => {
+                        // ... existing code ...
 
-                    // Handle other tabs...
+                        // Start a new fetch if needed
+                        if self.last_git_time.elapsed() >= self.auto_git_interval {
+                            println!("Time interval elapsed, checking jobs");
+                            self.last_git_time = Instant::now(); // Reset the timer
+
+                            self.start_pending_jobs_fetch();
+                            self.update_and_parse_jobs();
+                        }
+
+                        // Display the UI elements
+
+                        self.display_confirm_ui(ui);
+                    }
                 }
             });
         }
