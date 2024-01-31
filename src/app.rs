@@ -4,6 +4,7 @@ use egui::{TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, 
 use std::fs;
 use serde_json;
 use rfd::FileDialog;
+use base64::decode;
 use git2::{Repository, StatusOptions, StatusShow};
 use serde_yaml::Value;
 use directories::ProjectDirs;
@@ -431,20 +432,19 @@ impl TemplateApp {
 
 
     fn fetch_and_parse_jobs(&mut self) {
-        // println!("Pending jobs before parsing: {:?}", self.pending_jobs); // Debug print
         self.fetched_jobs.clear();
-
+    
         for job in &self.pending_jobs {
             if let Some((id, job_info)) = job.split_once(": ") {
-                // println!("Parsing job: {}, {}", id, job_info); // Debug print
-                if let Ok(parsed_info) = serde_json::from_str::<serde_json::Value>(job_info) {
-                    if let Some(job_name) = parsed_info["job_name"].as_str() {
-                        self.fetched_jobs.entry(job_name.to_string()).or_default().push(id.to_string());
-                    }
+                // Split the job info into parts
+                let parts: Vec<&str> = job_info.split(" - ").collect();
+                if parts.len() >= 1 {
+                    // The first part is the job name
+                    let job_name = parts[0];
+                    self.fetched_jobs.entry(job_name.to_string()).or_default().push(id.to_string());
                 }
             }
         }
-        // println!("Fetched jobs after parsing: {:?}", self.fetched_jobs); // Debug print
     }
 
 
@@ -521,7 +521,7 @@ impl TemplateApp {
                                     }
                                 }
 
-                                if ui.button("Reject").clicked() {
+                                if ui.button("Deny").clicked() {
                                     println!("User decided to reject for Job ID: {}", job_id);
                                     if let Err(e) = job_response(job_id, "Reject", &action_api_key, &action_listener_url) {
                                         println!("Error sending rejection: {}", e);
@@ -546,16 +546,30 @@ impl TemplateApp {
     fn fetch_drift_info(&mut self, job_id: &str) {
         // Search for the job in self.pending_jobs by job_id
         if let Some(job) = self.pending_jobs.iter().find(|job| job.starts_with(job_id)) {
-            // Extract the drift info from the job string
+            // Extract the job name and decision from the job string
             if let Some((_, job_info)) = job.split_once(": ") {
-                if let Ok(parsed_info) = serde_json::from_str::<serde_json::Value>(job_info) {
-                    if let Some(drift_info) = parsed_info["drift_info"].as_str() {
-                        self.drift_info = Some(drift_info.to_string());
+                let parts: Vec<&str> = job_info.split(" - Decision: ").collect();
+                if parts.len() == 2 {
+                    let job_name = parts[0];
+                    let decision = parts[1];
+    
+                    // Split the decision into the decision and the drift info
+                    let decision_parts: Vec<&str> = decision.split(" - Drift Info: ").collect();
+                    if decision_parts.len() == 2 {
+                        let decision = decision_parts[0];
+    
+                        // Decode the Base64 string
+                        if let Ok(decoded) = decode(decision_parts[1]) {
+                            let decoded_str = String::from_utf8(decoded).unwrap_or_else(|_| "Invalid UTF-8 sequence.".to_string());
+                            self.drift_info = Some(format!("Job Name: {}, Decision: {}, Drift Info: {}", job_name, decision, decoded_str));
+                        } else {
+                            self.drift_info = Some("Failed to decode Base64.".to_string());
+                        }
                     } else {
-                        self.drift_info = Some("Drift info not available for this job.".to_string());
+                        self.drift_info = Some("Job format is incorrect.".to_string());
                     }
                 } else {
-                    self.drift_info = Some("Failed to parse job information.".to_string());
+                    self.drift_info = Some("Job format is incorrect.".to_string());
                 }
             } else {
                 self.drift_info = Some("Job format is incorrect.".to_string());
