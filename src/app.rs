@@ -571,6 +571,7 @@ impl TemplateApp {
                 } else {
                     self.drift_info = Some("Job format is incorrect.".to_string());
                 }
+
             } else {
                 self.drift_info = Some("Job format is incorrect.".to_string());
             }
