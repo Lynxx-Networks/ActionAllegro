@@ -63,11 +63,10 @@ pub fn get_workflow_details(repo: &str, token: &str, workflow_id: &Option<u64>) 
 
 
 pub fn get_repo(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result<(), Box<dyn Error>> {
-    println!("Cloning repository: {}", repo_slug);
-    println!("Using API key: {}", api_key);
-    println!("Using path: {:?}", path);
+    println!("Processing repository: {}", repo_slug);
     let repo_url = format!("https://github.com/{}.git", repo_slug);
-    println!("Cloning repository: {}", &repo_url);
+    println!("Repository URL: {}", &repo_url);
+
     let mut cb = RemoteCallbacks::new();
     cb.credentials(move |_url, _username_from_url, _allowed_types| {
         Cred::userpass_plaintext("dummy_username", api_key)
@@ -76,19 +75,32 @@ pub fn get_repo(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result
     let mut fo = FetchOptions::new();
     fo.remote_callbacks(cb);
 
-    let mut builder = RepoBuilder::new();
-    builder.fetch_options(fo);
-
-    // Check if path is Some and convert to Path
     if let Some(ref path_str) = path {
         let path = Path::new(path_str);
 
-        match builder.clone(&*repo_url, path) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(Box::new(e)),
+        match Repository::open(&path) {
+            Ok(repo) => {
+                println!("Repository already exists, fetching updates...");
+                let mut remote = repo.find_remote("origin")?;
+                // Adjust branch name here if necessary
+                remote.fetch(&["main"], Some(&mut fo), None)?;
+
+                // Additional logic to merge fetched changes could be implemented here
+
+                Ok(())
+            },
+            Err(_) => {
+                println!("Repository does not exist, cloning...");
+                let mut builder = RepoBuilder::new();
+                builder.fetch_options(fo);
+                match builder.clone(&*repo_url, path) {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(Box::new(e)),
+                }
+            }
         }
     } else {
-        Err("No path provided for cloning the repository".into())
+        Err("No path provided for processing the repository".into())
     }
 }
 
