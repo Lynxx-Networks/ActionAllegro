@@ -1,5 +1,4 @@
-name: Test ActionListener
-
+name: Test ActionAllegro
 on:
   pull_request:
     types:
