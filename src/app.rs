@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response};
-use egui::{TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
+use egui::{ImageButton, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
 use std::fs;
 use serde_json;
 use rfd::FileDialog;
@@ -155,6 +155,7 @@ pub struct TemplateApp {
     is_ready_to_fetch_jobs: bool,
     show_job_details_window: bool,
     clicked_job_id: Option<String>,
+    show_setup_window: bool,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -174,6 +175,26 @@ struct AppConfig {
     action_listener_url: String,
     action_api_key: String,
 }
+
+// Assuming you have a function to load the image and create a texture
+fn load_png_as_texture(ctx: &egui::Context, image_path: &str) -> egui::TextureId {
+    // Load the PNG file
+    let image_data = std::fs::read(image_path).expect("Failed to load image");
+    let image = image::load_from_memory(&image_data).expect("Failed to decode image");
+    let image_buffer = image.to_rgba8();
+
+    // Convert the image to egui's expected format
+    let size = [image_buffer.width() as _, image_buffer.height() as _];
+    let pixels = image_buffer.into_raw();
+
+    // Create a texture
+    let texture = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+    // Ensure you have texture options defined or use default
+    let texture_options = egui::TextureOptions::default();
+    let texture_handle = ctx.load_texture("settings_icon", texture, texture_options);
+    texture_handle.id() // Return the TextureId
+}
+
 
 fn pick_file_location() -> Option<String> {
     FileDialog::new()
@@ -342,6 +363,7 @@ impl Default for TemplateApp {
             is_ready_to_fetch_jobs: false,
             show_job_details_window: false,
             clicked_job_id: None,
+            show_setup_window: false,
 
 
             columns: vec![
@@ -377,7 +399,7 @@ impl TemplateApp {
         app
     }
 
-    fn verify_password(&self, attempt: &str) -> bool {
+    pub fn verify_password(&self, attempt: &str) -> bool {
         if let (Some(ref salt), Some(ref hashed_password)) = (&self.config.salt, &self.config.hashed_password) {
             let mut hasher = Sha256::new();
             hasher.update(salt);
@@ -571,6 +593,7 @@ impl TemplateApp {
                 } else {
                     self.drift_info = Some("Job format is incorrect.".to_string());
                 }
+
             } else {
                 self.drift_info = Some("Job format is incorrect.".to_string());
             }
@@ -952,7 +975,7 @@ impl TemplateApp {
         }
     }
 
-    fn import_config(&mut self) {
+    pub fn import_config(&mut self) {
         if let Some(config_dir) = &self.config_dir {
             let config_path = Path::new(config_dir);
             let file_path = config_path.join("config.json");
@@ -1142,7 +1165,7 @@ impl eframe::App for TemplateApp {
                     {
                         ui.menu_button("File", |ui| {
                             if ui.button("Quit").clicked() {
-                                _frame.close();
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         });
                         ui.add_space(16.0);
@@ -1161,15 +1184,40 @@ impl eframe::App for TemplateApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 // Intro and repository info at the top
                 let can_export = !self.label.is_empty(); // 'true' if a repo is loaded
-
-                // Horizontal layout for heading and button
+            
+                // Horizontal layout for heading, buttons, and settings icon
                 ui.horizontal(|ui| {
                     ui.heading("ActionAllegro");
+            
                     // Enable button if a repository is loaded
                     if ui.add_enabled(can_export, egui::Button::new("Export Config")).clicked() {
                         self.export_config();
                     }
+            
+                    // Add some spacing or use ui.with_layout to push the settings icon to the right
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // First, ensure your texture_id is correctly obtained as before
+                        let icon_texture_id = load_png_as_texture(ctx, "src/resources/settings.png");
+            
+                        // Instead of directly passing `icon_texture_id`, create a tuple with it and the desired size
+                        let image_size = egui::vec2(24.0, 24.0); // Define the desired icon size
+            
+                        // Now create the ImageButton correctly
+                        if ui.add(egui::ImageButton::new((icon_texture_id, image_size))
+                            .frame(false)) // Turn off the default frame
+                            .clicked() {
+                            self.show_setup_window = true;
+                        }
+                    });
                 });
+                // // Button to open setup window
+                // let settings = IconButton::new(&ctx.resources.icons().settings);
+                // if ui.add(settings).clicked() {
+                //     self.show_setup_window = true; // Toggle visibility of the setup window
+                // }
+                // if ui.button("Setup").clicked() {
+                //     self.show_setup_window = true; // Toggle visibility of the setup window
+                // }
 
                 // Show message when no repository is loaded (i.e., label is empty)
                 if !can_export {
@@ -1177,22 +1225,37 @@ impl eframe::App for TemplateApp {
                 }
 
 
-                ui.horizontal(|ui| {
-                    ui.label("What is your Repository name?: ");
-                    ui.text_edit_singleline(&mut self.config.repo_name);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("What is your Github API Key?: ");
-                    ui.add(egui::TextEdit::singleline(&mut self.decrypted_github_pat).password(true));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("What is your listener url?: ");
-                    ui.text_edit_singleline(&mut self.action_listener_url);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("What is your listener api key?: ");
-                    ui.add(egui::TextEdit::singleline(&mut self.action_api_key).password(true));
-                });
+                // ui.horizontal(|ui| {
+                //     ui.label("What is your Repository name?: ");
+                //     ui.text_edit_singleline(&mut self.config.repo_name);
+                // });
+                // ui.horizontal(|ui| {
+                //     ui.label("What is your Github API Key?: ");
+                //     ui.add(egui::TextEdit::singleline(&mut self.decrypted_github_pat).password(true));
+                // });
+                // ui.horizontal(|ui| {
+                //     ui.label("What is your listener url?: ");
+                //     ui.text_edit_singleline(&mut self.action_listener_url);
+                // });
+                // ui.horizontal(|ui| {
+                //     ui.label("What is your listener api key?: ");
+                //     ui.add(egui::TextEdit::singleline(&mut self.action_api_key).password(true));
+                // });
+                    // Setup window, shown based on `show_setup_window` state
+                if self.show_setup_window {
+                    egui::Window::new("Setup")
+                        .open(&mut self.show_setup_window) // Bind window visibility to state variable
+                        .show(ctx, |ui| {
+                            ui.label("What is your Repository name?: ");
+                            ui.text_edit_singleline(&mut self.config.repo_name);
+                            ui.label("What is your Github API Key?: ");
+                            ui.add(egui::TextEdit::singleline(&mut self.decrypted_github_pat).password(true));
+                            ui.label("What is your listener URL?: ");
+                            ui.text_edit_singleline(&mut self.action_listener_url);
+                            ui.label("What is your listener API key?: ");
+                            ui.add(egui::TextEdit::singleline(&mut self.action_api_key).password(true));
+                        });
+                }
                 if ui.button("Fetch Actions").clicked() {
                     self.error_message = None;
                     match get_actions(&self.config.repo_name, &self.decrypted_github_pat) {
@@ -1378,30 +1441,48 @@ impl eframe::App for TemplateApp {
                                         self.error_message = Some("Please configure the repository and GitHub PAT before pulling.".to_string());
                                     } else {
                                         self.error_message = None;
-                                        if let Some(repo_location) = pick_folder_location() {
-                                            // Check if repository already exists
-                                            match Repository::open(&repo_location) {
-                                                Ok(_) => {
-                                                    println!("Repository already exists at the selected location.");
-                                                    self.error_message = Some("Repository already exists at the selected location.".to_string());
-                                                    // You can implement further logic here, like fetching updates
+                                        let repo_location = if let Some(ref repo_path) = self.config.repo_path {
+                                            // If repo_path is already set, use it directly without prompting for a new location
+                                            repo_path.clone()
+                                        } else {
+                                            // If repo_path is not set, prompt the user to pick a folder location
+                                            match pick_folder_location() {
+                                                Some(location) => location,
+                                                None => {
+                                                    self.error_message = Some("No folder location selected.".to_string());
+                                                    return; // Early return if no location is selected
                                                 },
-                                                Err(_) => {
-                                                    self.config.repo_path = Some(repo_location.clone()); // Save the repo path
-                                                    // Repository does not exist, attempt to clone
-                                                    match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &self.config.repo_path) {
-                                                        Ok(_) => {
-                                                            println!("Repository cloned successfully.");
-                                                            // self.repo_path = Path::new(repo_location.clone());
-                                                            // println!("Repo path: {:?}", self.repo_path);
-                                                            self.check_repo_status();
-                                                            self.config.repo_path = Some(repo_location); // Save the repo path
-                                                            println!("repo path 2: {:?}", self.config.repo_path);
-                                                        },
-                                                        Err(e) => self.error_message = Some(format!("Error: {}", e)),
-                                                    }
-                                                }
                                             }
+                                        };
+                            
+                                        // Check if repository already exists
+                                        match Repository::open(&repo_location) {
+                                            Ok(_) => {
+                                                println!("Repository already exists at the selected location.");
+                                                self.info_message = Some(format!("Repository updated at: {}", repo_location));
+                                                match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                                    Ok(_) => {
+                                                        println!("Repository cloned successfully.");
+                                                        self.check_repo_status();
+                                                        println!("repo path 2: {:?}", self.config.repo_path);
+                                                    },
+                                                    Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                                                }
+                                            },
+                                            Err(_) if self.config.repo_path.is_none() => {
+                                                // Only attempt to clone if repo_path was not previously set
+                                                self.config.repo_path = Some(repo_location.clone()); // Save the repo path
+                                                // Attempt to clone the repository
+                                                match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                                    Ok(_) => {
+                                                        println!("Repository cloned successfully.");
+                                                        self.check_repo_status();
+                                                        println!("repo path 2: {:?}", self.config.repo_path);
+                                                    },
+                                                    Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                                                }
+                                            },
+                                            _ => {} // If the repo_path was set but the repository does not exist, you may want to handle this case.
                                         }
                                     }
                                 }
@@ -1410,6 +1491,7 @@ impl eframe::App for TemplateApp {
                                     ui.colored_label(egui::Color32::RED, message);
                                 }
                             });
+                            
                             ui.horizontal_top(|ui| {
                                 let mut show_commit_window = self.show_commit_message_input;
                                 let mut commit_and_push_clicked = false;

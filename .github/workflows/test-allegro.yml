@@ -1,0 +1,31 @@
+name: Test ActionListener
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+    branches: [ main ]
+
+jobs:
+  test:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Build the Docker test container
+      run: docker build -t madeofpendletonwool/allegro-test . -f dockerfile-test
+
+    - name: Build the Docker test container
+      run: docker build -t madeofpendletonwool/allegro-image . -f dockerfile
+
+    - name: Scan for vulnerabilities
+      uses: crazy-max/ghaction-container-scan@v3
+      with:
+        image: madeofpendletonwool/allegro-image:latest
+        severity_threshold: HIGH
+
+    - name: Run tests in the Docker container
+      run: docker run madeofpendletonwool/allegro-test
