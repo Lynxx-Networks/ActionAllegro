@@ -4,7 +4,7 @@ on:
     types:
       - opened
       - edited
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   test:
@@ -17,14 +17,12 @@ jobs:
     - name: Build the Docker test container
       run: docker build -t madeofpendletonwool/allegro-test . -f dockerfile-test
 
-    - name: Build the Docker test container
-      run: docker build -t madeofpendletonwool/allegro-image . -f dockerfile
-
-    - name: Scan for vulnerabilities
-      uses: crazy-max/ghaction-container-scan@v3
+    - uses: rustsec/audit-check@v1.4.1
       with:
-        image: madeofpendletonwool/allegro-image:latest
-        severity_threshold: HIGH
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Run cargo-checkmate action
+      uses: cargo-checkmate/cargo-checkmate/.github/workflows/callee.yaml@gh-callee-v1
 
     - name: Run tests in the Docker container
       run: docker run madeofpendletonwool/allegro-test

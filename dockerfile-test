@@ -1,10 +1,10 @@
-# Use a Rust image to build and test the application
-FROM rust:alpine as tester
+# Use a Debian-based Rust image to build and test the application
+FROM rust:1.76.0-bookworm as tester
 WORKDIR /usr/src/ActionListener
 
 # Install build dependencies required for your application and tests
 # This might include additional tools and libraries needed during the build or test phase
-RUN apk update && apk add --no-cache musl-dev openssl-dev gcc
+RUN apt-get update && apt-get install -y libssl-dev pkg-config gcc
 
 # Copy your entire application source code into the Docker image
 COPY . .
