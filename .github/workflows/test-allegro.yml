@@ -4,7 +4,7 @@ on:
     types:
       - opened
       - edited
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   test:
