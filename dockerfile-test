@@ -4,7 +4,7 @@ WORKDIR /usr/src/ActionListener
 
 # Install build dependencies required for your application and tests
 # This might include additional tools and libraries needed during the build or test phase
-RUN apk update && apk add --no-cache musl-dev openssl-dev gcc
+RUN apk update && apk add --no-cache musl-dev openssl-dev libressl-dev gcc
 
 # Copy your entire application source code into the Docker image
 COPY . .
