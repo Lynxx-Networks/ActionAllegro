@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-  pull_request:
 
 jobs:
   compile:
@@ -46,3 +45,69 @@ jobs:
           name: ${{ matrix.os }}-build
           path: target/release/${{ env.ARTIFACT_NAME }}
             
+  release:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: ubuntu-latest-build
+          path: artifacts/ubuntu-latest
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: macOS-latest-build
+          path: artifacts/macOS-latest
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: windows-latest-build
+          path: artifacts/windows-latest
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        id: upload-release-asset 
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} 
+          asset_path: ./artifacts/ubuntu-latest/ActionAllegro
+          asset_name: ActionAllegro-ubuntu-latest
+          asset_content_type: application/octet-stream
+
+      - name: Upload Release Asset
+        id: upload-release-asset 
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} 
+          asset_path: ./artifacts/macOS-latest/ActionAllegro
+          asset_name: ActionAllegro-macOS-latest
+          asset_content_type: application/octet-stream
+
+      - name: Upload Release Asset
+        id: upload-release-asset 
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} 
+          asset_path: ./artifacts/windows-latest/ActionAllegro.exe
+          asset_name: ActionAllegro-windows-latest.exe
+          asset_content_type: application/octet-stream

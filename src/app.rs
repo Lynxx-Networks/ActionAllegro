@@ -399,7 +399,7 @@ impl TemplateApp {
         app
     }
 
-    fn verify_password(&self, attempt: &str) -> bool {
+    pub fn verify_password(&self, attempt: &str) -> bool {
         if let (Some(ref salt), Some(ref hashed_password)) = (&self.config.salt, &self.config.hashed_password) {
             let mut hasher = Sha256::new();
             hasher.update(salt);
@@ -975,7 +975,7 @@ impl TemplateApp {
         }
     }
 
-    fn import_config(&mut self) {
+    pub fn import_config(&mut self) {
         if let Some(config_dir) = &self.config_dir {
             let config_path = Path::new(config_dir);
             let file_path = config_path.join("config.json");
@@ -1165,7 +1165,7 @@ impl eframe::App for TemplateApp {
                     {
                         ui.menu_button("File", |ui| {
                             if ui.button("Quit").clicked() {
-                                _frame.close();
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         });
                         ui.add_space(16.0);
