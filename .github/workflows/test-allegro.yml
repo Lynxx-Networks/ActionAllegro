@@ -8,21 +8,33 @@ on:
 
 jobs:
   test:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
-    
     - name: Build the Docker test container
       run: docker build -t madeofpendletonwool/allegro-test . -f dockerfile-test
-
     - uses: rustsec/audit-check@v1.4.1
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Run cargo-checkmate action
-      uses: cargo-checkmate/cargo-checkmate/.github/workflows/callee.yaml@gh-callee-v1
-
     - name: Run tests in the Docker container
       run: docker run madeofpendletonwool/allegro-test
+
+  cache-checkmate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: taiki-e/cache-cargo-install-action@v1
+      with:
+        tool: cargo-checkmate
+
+  run-phase:
+    strategy:
+      matrix:
+        phase: [audit, build, check, clippy, doc, test]
+    needs: cache-checkmate
+    runs-on: ubuntu-latest
+    steps:
+    - uses: taiki-e/cache-cargo-install-action@v1
+      with:
+        tool: cargo-checkmate
+    - uses: actions/checkout@v3
+    - run: cargo-checkmate run ${{ matrix.phase }}

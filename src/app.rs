@@ -1324,8 +1324,6 @@ impl eframe::App for TemplateApp {
                                 }
                             }
                         });
-                        // let mut dropped_action = None;
-                        // Layout for the folder structure and main content
                         ui.columns(2, |columns| {
                             columns[0].vertical(|ui| {
                                 ui.set_min_width(75.0); // Set a minimum width for the folder column
