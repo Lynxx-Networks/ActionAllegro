@@ -179,8 +179,10 @@ struct AppConfig {
 // Assuming you have a function to load the image and create a texture
 fn load_png_as_texture(ctx: &egui::Context, image_path: &str) -> egui::TextureId {
     // Load the PNG file
-    let image_data = std::fs::read(image_path).expect("Failed to load image");
-    let image = image::load_from_memory(&image_data).expect("Failed to decode image");
+    // let image_data = std::fs::read(image_path).expect("Failed to load image");
+    let image_data = include_bytes!("../src/resources/settings.png");
+
+    let image = image::load_from_memory(image_data).expect("Failed to decode image");
     let image_buffer = image.to_rgba8();
 
     // Convert the image to egui's expected format
