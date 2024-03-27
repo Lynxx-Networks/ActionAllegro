@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response};
+use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response, get_repo_scratch};
 use egui::{ImageButton, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
 use std::fs;
 use serde_json;
@@ -18,6 +18,8 @@ use block_padding::Pkcs7;
 use aes::cipher::{KeyIvInit, BlockEncryptMut, BlockDecryptMut};
 use hmac::Hmac;
 use pbkdf2::pbkdf2;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -156,6 +158,8 @@ pub struct TemplateApp {
     show_job_details_window: bool,
     clicked_job_id: Option<String>,
     show_setup_window: bool,
+    message_timestamp: Option<u64>,
+    search_term: Option<String>,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -366,6 +370,8 @@ impl Default for TemplateApp {
             show_job_details_window: false,
             clicked_job_id: None,
             show_setup_window: false,
+            message_timestamp: None,
+            search_term: None,
 
 
             columns: vec![
@@ -540,15 +546,25 @@ impl TemplateApp {
                             if let Some(job_id) = &self.clicked_job_id {
                                 if ui.button("Approve").clicked() {
                                     println!("User decided to approve for Job ID: {}", job_id);
+                                    self.show_job_details_window = false;
+                                    self.info_message = Some("Confirmation Sent to Job".to_string());
+                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                     if let Err(e) = job_response(job_id, "Approve", &action_api_key, &action_listener_url) {
                                         println!("Error sending approval: {}", e);
+                                        self.error_message = Some(format!("Error sending approval: {}", e));
+                                        self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                     }
                                 }
 
                                 if ui.button("Deny").clicked() {
                                     println!("User decided to reject for Job ID: {}", job_id);
+                                    self.show_job_details_window = false;
+                                    self.info_message = Some("Deployment Denied. Nothing will be built.".to_string());
+                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                     if let Err(e) = job_response(job_id, "Reject", &action_api_key, &action_listener_url) {
                                         println!("Error sending rejection: {}", e);
+                                        self.error_message = Some(format!("Error sending rejection: {}", e));
+                                        self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                     }
                                 }
                             }
@@ -705,6 +721,7 @@ impl TemplateApp {
                     let statuses = repo.statuses(None).unwrap(); // Handle this unwrap properly
                     if statuses.is_empty() {
                         self.info_message = Some("No changes to upload".to_string());
+                        self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                     } else {
 // Step 2: Stage changes
                         let mut index = repo.index().unwrap(); // Handle this unwrap properly
@@ -748,17 +765,23 @@ impl TemplateApp {
                         // Step 4: Push the commit
                         if let Err(e) = push_repo(repo_path, &self.decrypted_github_pat) {
                             self.error_message = Some(format!("Failed to push changes: {}", e));
+                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                             self.check_repo_status();
                         } else {
                             self.info_message = Some("Changes uploaded successfully".to_string());
+                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                             self.check_repo_status();
                         }
                     }
                 },
-                Err(e) => self.error_message = Some(format!("Failed to open repository: {}", e)),
+                Err(e) => {
+                    self.error_message = Some(format!("Failed to open repository: {}", e));
+                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                },
             }
         } else {
             self.error_message = Some("Repository path is not set".to_string());
+            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
         }
     }
 
@@ -817,12 +840,14 @@ impl TemplateApp {
                                                         },
                                                         Err(e) => {
                                                             self.error_message = Some(format!("YAML parsing error: {}", e));
+                                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                                             return;
                                                         }
                                                     }
                                                 },
                                                 Err(e) => {
                                                     self.error_message = Some(format!("Error pulling YAML: {}", e));
+                                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                                     return;
                                                 }
                                             }
@@ -831,6 +856,7 @@ impl TemplateApp {
                                     Err(e) => {
                                         // Handle the error appropriately
                                         self.error_message = Some(format!("JSON parsing error: {}", e));
+                                        self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                         return;
                                     }
                                 }
@@ -844,6 +870,7 @@ impl TemplateApp {
                                         },
                                         Err(e) => {
                                             self.error_message = Some(format!("JSON parsing error: {}", e));
+                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                             return;
                                         }
                                     }
@@ -851,7 +878,10 @@ impl TemplateApp {
 
                             }
                         },
-                        Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                        Err(e) => {
+                            self.error_message = Some(format!("Error: {}", e));
+                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                        },
                     }
                 }
             }
@@ -908,6 +938,7 @@ impl TemplateApp {
                                 },
                                 Err(e) => {
                                     self.error_message = Some(format!("JSON parsing error: {}", e));
+                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                     return;
                                 }
                             }
@@ -955,8 +986,14 @@ impl TemplateApp {
                                     let workflow_id = self.opened_action_id.unwrap(); // Make sure to handle unwrap properly
                                     let result = run_workflow(&self.config.repo_name, &self.decrypted_github_pat, workflow_id, Some(&self.current_input_values));
                                     match result {
-                                        Ok(_) => self.info_message = Some(("Workflow triggered successfully").parse().unwrap()),
-                                        Err(e) => self.error_message = Some(format!("Failed to trigger workflow: {}", e)),
+                                        Ok(_) => {
+                                            self.info_message = Some(("Workflow triggered successfully").parse().unwrap());
+                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                        },
+                                        Err(e) => {
+                                            self.error_message = Some(format!("Failed to trigger workflow: {}", e));
+                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                        },
                                     }
                                 }
                             }
@@ -1280,17 +1317,49 @@ impl eframe::App for TemplateApp {
                         Err(err) => {
                             println!("Error occurred");
                             self.error_message = Some(format!("Error: {}", err));
+                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                         }
                     }
                 }
 
 
+                // if let Some(error_msg) = &self.error_message {
+                //     ui.colored_label(egui::Color32::RED, error_msg);
+                // }
+                // if let Some(error_msg) = &self.info_message {
+                //     ui.colored_label(egui::Color32::GREEN, error_msg);
+                // }
+
+                const MESSAGE_DURATION: u64 = 5; // Message duration in seconds
+
+                if let Some(timestamp) = self.message_timestamp {
+                    let current_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time went backwards")
+                        .as_secs();
+                
+                    // Check if the duration has passed to clear messages
+                    if current_timestamp > timestamp + MESSAGE_DURATION {
+                        self.error_message = None;
+                        self.info_message = None;
+                        self.message_timestamp = None;
+                    }
+                }
+                
+                // Display error message if it exists
                 if let Some(error_msg) = &self.error_message {
+                    // Display the error message in red
                     ui.colored_label(egui::Color32::RED, error_msg);
                 }
-                if let Some(error_msg) = &self.info_message {
-                    ui.colored_label(egui::Color32::GREEN, error_msg);
+                
+                // Display info message if it exists
+                if let Some(info_msg) = &self.info_message {
+                    // Display the info message in green
+                    ui.colored_label(egui::Color32::GREEN, info_msg);
                 }
+                
+                
+                
 
                 ui.horizontal(|ui| {
                     // Tab for "Organize and Run"
@@ -1324,6 +1393,12 @@ impl eframe::App for TemplateApp {
                                     self.folders.insert(self.new_folder_name.clone(), Vec::new());
                                     self.new_folder_name.clear(); // Clear the input field after adding
                                 }
+                            }
+                            ui.label("Search: ");
+                            let mut temp_search_term = self.search_term.clone().unwrap_or_default();
+                            if ui.text_edit_singleline(&mut temp_search_term).changed() {
+                                // Here, temp_search_term is already a String, so it should be directly set.
+                                self.search_term = Some(temp_search_term);
                             }
                         });
                         ui.columns(2, |columns| {
@@ -1363,28 +1438,45 @@ impl eframe::App for TemplateApp {
                                 if let Some(folder_name) = &self.selected_folder {
                                     egui::ScrollArea::vertical().show(ui, |ui| {
                                         ui.label(format!("Contents of folder: {}", folder_name));
-                                        if let Some(folder_actions) = self.folders.get(folder_name) {
+                                        if let Some(mut folder_actions) = self.folders.get(folder_name).cloned() {
+                                            // Sort the folder_actions alphabetically
+                                            folder_actions.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+                                            
+                                        // if let Some(folder_actions) = self.folders.get(folder_name) {
                                             for action_name in folder_actions {
-                                                ui.horizontal(|ui| {
-                                                    let action_id_ui = Id::new(action_name); // Use action name as the unique identifier for UI elements
-                                                    drag_source(ui, action_id_ui, |ui| {
-                                                        ui.label(action_name);
-                                                        ui.memory(|mem| {
-                                                            if mem.is_being_dragged(action_id_ui) {
-                                                                self.dragged_action = Some(action_name.clone());
-                                                            }
+                                                // Check if the search term is present and matches the action name
+                                                let display_action = if let Some(ref search_term) = self.search_term {
+                                                    // Convert both strings to lowercase for case-insensitive comparison
+                                                    action_name.to_lowercase().contains(&search_term.to_lowercase())
+                                                } else {
+                                                    // If there's no search term, display all actions
+                                                    true
+                                                };
+                            
+                                                if display_action {
+                                                    ui.horizontal(|ui| {
+                                                        let action_name_drag = action_name.clone();
+                                                        let action_id_ui = egui::Id::new(action_name_drag.clone()); // Use action name as the unique identifier for UI elements
+
+                                                        drag_source(ui, action_id_ui, |ui| {
+                                                            ui.label(action_name_drag.clone());
+                                                            ui.memory(|mem| {
+                                                                if mem.is_being_dragged(action_id_ui) {
+                                                                    self.dragged_action = Some(action_name_drag.clone());
+                                                                }
+                                                            });
                                                         });
-                                                    });
-                                                    // Add a small button next to the action for selection
-                                                    if ui.button("Open").clicked() {
-                                                        println!("Opening action: {:?}", action_name);
-                                                        if let Some(&action_id) = self.actions.get(action_name) {
-                                                            // Use the numerical ID from the actions HashMap
-                                                            self.opened_action_id = Some(action_id);
-                                                            self.action_detail_window_open = Some(action_name.clone());
+                                                        // Add a small button next to the action for selection
+                                                        if ui.button("Open").clicked() {
+                                                            println!("Opening action: {:?}", action_name);
+                                                            if let Some(&action_id) = self.actions.get(&action_name) {
+                                                                // Use the numerical ID from the actions HashMap
+                                                                self.opened_action_id = Some(action_id);
+                                                                self.action_detail_window_open = Some(action_name.clone());
+                                                            }
                                                         }
-                                                    }
-                                                });
+                                                    });
+                                                }
                                             }
                                         }
                                     });
@@ -1439,6 +1531,7 @@ impl eframe::App for TemplateApp {
                                     println!("Pulling repository: {}", self.config.repo_name);
                                     if self.config.repo_name.is_empty() || self.decrypted_github_pat.is_empty() {
                                         self.error_message = Some("Please configure the repository and GitHub PAT before pulling.".to_string());
+                                        self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                     } else {
                                         self.error_message = None;
                                         let repo_location = if let Some(ref repo_path) = self.config.repo_path {
@@ -1450,6 +1543,7 @@ impl eframe::App for TemplateApp {
                                                 Some(location) => location,
                                                 None => {
                                                     self.error_message = Some("No folder location selected.".to_string());
+                                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                                     return; // Early return if no location is selected
                                                 },
                                             }
@@ -1460,13 +1554,18 @@ impl eframe::App for TemplateApp {
                                             Ok(_) => {
                                                 println!("Repository already exists at the selected location.");
                                                 self.info_message = Some(format!("Repository updated at: {}", repo_location));
+                                                // self.info_message = Some("Your info message".to_string());
+                                                self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                                 match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
                                                     Ok(_) => {
                                                         println!("Repository cloned successfully.");
                                                         self.check_repo_status();
                                                         println!("repo path 2: {:?}", self.config.repo_path);
                                                     },
-                                                    Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                                                    Err(e) => {
+                                                        self.error_message = Some(format!("Error: {}", e));
+                                                        self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                                    },
                                                 }
                                             },
                                             Err(_) if self.config.repo_path.is_none() => {
@@ -1479,7 +1578,10 @@ impl eframe::App for TemplateApp {
                                                         self.check_repo_status();
                                                         println!("repo path 2: {:?}", self.config.repo_path);
                                                     },
-                                                    Err(e) => self.error_message = Some(format!("Error: {}", e)),
+                                                    Err(e) => {
+                                                        self.error_message = Some(format!("Error: {}", e));
+                                                        self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                                    },
                                                 }
                                             },
                                             _ => {} // If the repo_path was set but the repository does not exist, you may want to handle this case.
@@ -1491,6 +1593,51 @@ impl eframe::App for TemplateApp {
                                     ui.colored_label(egui::Color32::RED, message);
                                 }
                             });
+
+                            if ui.add_sized([120.0, 40.0], egui::Button::new("Repull Repository")).clicked() {
+                                println!("Pulling repository: {}", self.config.repo_name);
+                                if self.config.repo_name.is_empty() || self.decrypted_github_pat.is_empty() {
+                                    self.error_message = Some("Please configure the repository and GitHub PAT before pulling.".to_string());
+                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                } else {
+                                    self.error_message = None;
+                                    let repo_location = if let Some(ref repo_path) = self.config.repo_path {
+                                        repo_path.clone()
+                                    } else {
+                                        match pick_folder_location() {
+                                            Some(location) => location,
+                                            None => {
+                                                self.error_message = Some("No folder location selected.".to_string());
+                                                self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                                return;
+                                            },
+                                        }
+                                    };
+                            
+                                    // Remove existing repository if it exists
+                                    let path = Path::new(&repo_location);
+                                    if path.exists() {
+                                        std::fs::remove_dir_all(&path).unwrap_or_else(|_| println!("Failed to remove existing repository."));
+                                    }
+                            
+                                    // Always attempt to clone the repository from scratch
+                                    match get_repo_scratch(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                        Ok(_) => {
+                                            println!("Repository cloned successfully.");
+                                            self.check_repo_status();
+                                            println!("repo path 2: {:?}", self.config.repo_path);
+                                        },
+                                        Err(e) => {
+                                            self.error_message = Some(format!("Error: {}", e));
+                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                        },
+                                    }
+                                }
+                            }
+                            if let Some(ref message) = self.error_message {
+                                ui.colored_label(egui::Color32::RED, message);
+                            }
+                            
                             
                             ui.horizontal_top(|ui| {
                                 let mut show_commit_window = self.show_commit_message_input;
