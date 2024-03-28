@@ -104,6 +104,35 @@ pub fn get_repo(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result
     }
 }
 
+pub fn get_repo_scratch(repo_slug: &str, api_key: &str, path: &Option<String>) -> Result<(), Box<dyn Error>> {
+    println!("Processing repository: {}", repo_slug);
+    let repo_url = format!("https://github.com/{}.git", repo_slug);
+    println!("Repository URL: {}", &repo_url);
+
+    let mut cb = RemoteCallbacks::new();
+    cb.credentials(move |_url, _username_from_url, _allowed_types| {
+        Cred::userpass_plaintext("dummy_username", api_key)
+    });
+
+    let mut fo = FetchOptions::new();
+    fo.remote_callbacks(cb);
+
+    if let Some(ref path_str) = path {
+        let path = Path::new(path_str);
+
+        println!("Cloning repository to ensure fresh pull...");
+        let mut builder = RepoBuilder::new();
+        builder.fetch_options(fo);
+        match builder.clone(&*repo_url, path) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(Box::new(e)),
+        }
+    } else {
+        Err("No path provided for processing the repository".into())
+    }
+}
+
+
 pub fn push_repo(repo_path: &str, api_key: &str) -> Result<(), Box<dyn Error>> {
     println!("Pushing to repository at path: {}", repo_path);
 
