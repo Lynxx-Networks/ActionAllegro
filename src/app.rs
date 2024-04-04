@@ -5,7 +5,7 @@ use std::fs;
 use serde_json;
 use rfd::FileDialog;
 use base64::decode;
-use git2::{Repository, StatusOptions, StatusShow};
+use git2::{Repository, StatusOptions, StatusShow, Signature};
 use serde_yaml::Value;
 use directories::ProjectDirs;
 use std::time::{Duration, Instant};
@@ -160,6 +160,8 @@ pub struct TemplateApp {
     show_setup_window: bool,
     message_timestamp: Option<u64>,
     search_term: Option<String>,
+    git_user: String,
+    git_email: String,
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -372,6 +374,8 @@ impl Default for TemplateApp {
             show_setup_window: false,
             message_timestamp: None,
             search_term: None,
+            git_user: "action_allegro_user".to_string(),
+            git_email: "aa@actionallregro.com".to_string(),
 
 
             columns: vec![
@@ -756,7 +760,11 @@ impl TemplateApp {
 
                         // Step 3: Commit changes
                         let oid = index.write_tree().unwrap(); // Handle this unwrap properly
-                        let signature = repo.signature().unwrap(); // Handle this unwrap properly
+                        // let signature = repo.signature().unwrap(); // Handle this unwrap properly
+                        let signature = match (&self.git_user, &self.git_email) {
+                            (user, email) => repo.signature().unwrap_or_else(|_| Signature::now(user, email).expect("Failed to create signature")),
+                            _ => repo.signature().expect("Failed to retrieve signature"),
+                        };
                         let parent_commit = find_last_commit(&repo).unwrap(); // Function to find the last commit
                         let tree = repo.find_tree(oid).unwrap(); // Handle this unwrap properly
                         let full_commit_message = format!("{}: {}\n\nThis commit originated from ActionAllegro", self.config.name, self.commit_message);
@@ -1293,6 +1301,10 @@ impl eframe::App for TemplateApp {
                             ui.text_edit_singleline(&mut self.action_listener_url);
                             ui.label("What is your listener API key?: ");
                             ui.add(egui::TextEdit::singleline(&mut self.action_api_key).password(true));
+                            ui.label("What is your git username?: ");
+                            ui.text_edit_singleline(&mut self.git_user);
+                            ui.label("What is your git email?: ");
+                            ui.text_edit_singleline(&mut self.git_email);
                         });
                 }
                 if ui.button("Fetch Actions").clicked() {
