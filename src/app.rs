@@ -23,6 +23,8 @@ use std::time::UNIX_EPOCH;
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use egui::FontId;
+use egui::RichText;
 // fn derive_key(password: &[u8], output: &mut [u8]) {
 //     let pbkdf2_iterations = 100_000; // Number of iterations, adjust as needed
 //     let salt = b"some-fixed-salt"; // Ideally, use a fixed salt
@@ -969,7 +971,11 @@ impl TemplateApp {
                                             ui.vertical(|ui| {
                                                 // Display the description as a label above the input
                                                 // Display the variable name
-                                                ui.label(input_name);
+                                                // ui.label(input_name);
+                                                // ui.heading(format!("{}:", input_name));
+                                                // ui.label(RichText::new(format!("{}:", input_name).font(FontId::proportional(40.0))));
+                                                let current_label = format!("{}:", input_name);
+                                                ui.label(RichText::new(current_label).font(FontId::proportional(14.0)));
                                                 if let Some(description) = self.input_descriptions.get(input_name) {
                                                     ui.label(description);
                                                 }
@@ -988,12 +994,24 @@ impl TemplateApp {
                                                                 });
                                                         }
                                                     }
+                                                    "boolean" => {
+                                                        // Default to false if not already set
+                                                        let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(|| "false".to_string());
+                                                        // Convert the string value to a bool for the checkbox
+                                                        let mut bool_value = current_value == "true";
+                                                        // Create a checkbox for boolean type
+                                                        if ui.checkbox(&mut bool_value, "").changed() {
+                                                            // Update the current value based on checkbox state
+                                                            *current_value = bool_value.to_string();
+                                                        }
+                                                    }
                                                     _ => {
                                                         // Create a text box for string type
                                                         let current_value = self.current_input_values.entry(input_name.clone()).or_insert_with(String::new);
                                                         ui.text_edit_singleline(current_value);
                                                     }
                                                 }
+                                                ui.add_space(5.0);
                                             });
                                         });
                                         // workflow_inputs_data.insert(input_name.clone(), input_value);
@@ -1321,6 +1339,9 @@ impl eframe::App for TemplateApp {
                     match get_actions(&self.config.repo_name, &self.decrypted_github_pat) {
                         Ok(actions) => {
                             println!("Fetched {} actions", actions.len());
+                            self.info_message = Some(format!("Fetched {} actions", actions.len()));
+                            // self.info_message = Some("Your info message".to_string());
+                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                             println!("Actions: {:?}", actions.keys());
 
                             // Update self.actions
@@ -1609,10 +1630,6 @@ impl eframe::App for TemplateApp {
                                         }
                                     }
                                 }
-                                // Display the error message if it's set
-                                if let Some(ref message) = self.error_message {
-                                    ui.colored_label(egui::Color32::RED, message);
-                                }
                             });
 
                             if ui.add_sized([120.0, 40.0], egui::Button::new("Repull Repository")).clicked() {
@@ -1642,9 +1659,11 @@ impl eframe::App for TemplateApp {
                                     }
                             
                                     // Always attempt to clone the repository from scratch
-                                    match get_repo_scratch(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                    match get_repo_scratch(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location.clone())) {
                                         Ok(_) => {
                                             println!("Repository cloned successfully.");
+                                            self.info_message = Some(format!("Repository updated at: {}", repo_location));
+                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
                                             self.check_repo_status();
                                             println!("repo path 2: {:?}", self.config.repo_path);
                                         },
@@ -1655,8 +1674,63 @@ impl eframe::App for TemplateApp {
                                     }
                                 }
                             }
-                            if let Some(ref message) = self.error_message {
-                                ui.colored_label(egui::Color32::RED, message);
+
+                            if ui.add_sized([120.0, 40.0], egui::Button::new("Pull to New Location")).clicked() {
+                                println!("Pulling repository: {}", self.config.repo_name);
+                                if self.config.repo_name.is_empty() || self.decrypted_github_pat.is_empty() {
+                                    self.error_message = Some("Please configure the repository and GitHub PAT before pulling.".to_string());
+                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                } else {
+                                    self.error_message = None;
+                                    let repo_location = 
+                                    match pick_folder_location() {
+                                        Some(location) => location,
+                                        None => {
+                                            self.error_message = Some("No folder location selected.".to_string());
+                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                            return; // Early return if no location is selected
+                                        },
+                                    };
+                                    
+                        
+                                    // Check if repository already exists
+                                    match Repository::open(&repo_location) {
+                                        Ok(_) => {
+                                            println!("Repository already exists at the selected location.");
+                                            self.info_message = Some(format!("Repository updated at: {}", repo_location));
+                                            // self.info_message = Some("Your info message".to_string());
+                                            self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                            match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                                Ok(_) => {
+                                                    println!("Repository cloned successfully.");
+                                                    self.check_repo_status();
+                                                    println!("repo path 2: {:?}", self.config.repo_path);
+                                                },
+                                                Err(e) => {
+                                                    self.error_message = Some(format!("Error: {}", e));
+                                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                                },
+                                            }
+                                        },
+                                        Err(_) if self.config.repo_path.is_none() => {
+                                            // Only attempt to clone if repo_path was not previously set
+                                            self.config.repo_path = Some(repo_location.clone()); // Save the repo path
+                                            // Attempt to clone the repository
+                                            match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                                Ok(_) => {
+                                                    println!("Repository cloned successfully.");
+                                                    self.check_repo_status();
+                                                    println!("repo path 2: {:?}", self.config.repo_path);
+                                                },
+                                                Err(e) => {
+                                                    self.error_message = Some(format!("Error: {}", e));
+                                                    self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                                },
+                                            }
+                                        },
+                                        _ => {} // If the repo_path was set but the repository does not exist, you may want to handle this case.
+                                    }
+                                }
                             }
                             
                             

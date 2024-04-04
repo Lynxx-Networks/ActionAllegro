@@ -9,33 +9,60 @@ use git2::build::RepoBuilder;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, LINK};
+
 pub fn get_actions(repo: &str, token: &str) -> Result<HashMap<String, u64>, Box<dyn Error>> {
     println!("Fetching actions for repository: {}", repo);
-    let url = format!("https://api.github.com/repos/{}/actions/workflows", repo);
-
-    // Create a client instance
-    let client = reqwest::blocking::Client::new();
-
-    // Perform the request with the Authorization header
-    let response = client.get(&url)
-        .header("User-Agent", "reqwest") // GitHub API requires a user-agent
-        .header("Authorization", format!("Bearer {}", token))
-        .send()?;
-
-    let body = response.text()?;
-    let json: Value = serde_json::from_str(&body)?;
+    let base_url = format!("https://api.github.com/repos/{}/actions/workflows", repo);
+    let client = Client::new();
 
     let mut actions = HashMap::new();
-    if let Some(workflows) = json["workflows"].as_array() {
-        for workflow in workflows {
-            if let (Some(name), Some(id)) = (workflow["name"].as_str(), workflow["id"].as_u64()) {
-                actions.insert(name.to_string(), id);
+    let mut next_page_url = Some(base_url);
+
+    while let Some(url) = next_page_url {
+        // Reset for next iteration
+        next_page_url = None;
+
+        let response = client.get(&url)
+            .header("User-Agent", "reqwest")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()?;
+
+        let headers = response.headers().clone();
+        let body = response.text()?;
+        let json: Value = serde_json::from_str(&body)?;
+
+        if let Some(workflows) = json["workflows"].as_array() {
+            for workflow in workflows {
+                if let (Some(name), Some(id)) = (workflow["name"].as_str(), workflow["id"].as_u64()) {
+                    actions.insert(name.to_string(), id);
+                }
+            }
+        }
+
+        // Check for a 'next' page link in the headers
+        if let Some(link_header) = headers.get(LINK) {
+            if let Ok(link_header_str) = link_header.to_str() {
+                next_page_url = extract_next_page_url(link_header_str);
             }
         }
     }
 
     Ok(actions)
 }
+
+// Helper function to extract the 'next' page URL from the Link header
+fn extract_next_page_url(link_header: &str) -> Option<String> {
+    link_header.split(',')
+        .find(|part| part.contains("rel=\"next\""))
+        .and_then(|next_link_part| {
+            let url_part = next_link_part.split(';').next()?;
+            let url = url_part.trim().trim_start_matches('<').trim_end_matches('>');
+            Some(url.to_string())
+        })
+}
+
 
 pub fn get_workflow_details(repo: &str, token: &str, workflow_id: &Option<u64>) -> Result<Value, Box<dyn Error>> {
     match workflow_id {
