@@ -761,9 +761,18 @@ impl TemplateApp {
                         // Step 3: Commit changes
                         let oid = index.write_tree().unwrap(); // Handle this unwrap properly
                         // let signature = repo.signature().unwrap(); // Handle this unwrap properly
-                        let signature = match (&self.git_user, &self.git_email) {
-                            (user, email) => repo.signature().unwrap_or_else(|_| Signature::now(user, email).expect("Failed to create signature")),
-                            _ => repo.signature().expect("Failed to retrieve signature"),
+                        if self.git_user.is_empty() || self.git_email.is_empty() {
+                            self.error_message = Some("Git username and email must be set for committing changes".to_string());
+                            // Early return to avoid attempting to commit and push changes
+                            return;
+                        }
+                    
+                        let signature = match Signature::now(&self.git_user, &self.git_email) {
+                            Ok(sig) => sig,
+                            Err(e) => {
+                                self.error_message = Some(format!("Failed to create Git signature: {}", e));
+                                return; // Early return to avoid attempting to commit and push changes
+                            }
                         };
                         let parent_commit = find_last_commit(&repo).unwrap(); // Function to find the last commit
                         let tree = repo.find_tree(oid).unwrap(); // Handle this unwrap properly
