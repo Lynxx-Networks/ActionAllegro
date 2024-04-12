@@ -4,10 +4,11 @@ use serde_json::{json, Value};
 use std::error::Error;
 use std::path::Path;
 use git2;
-use git2::{Commit, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository};
+use git2::{Commit, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository, BranchType};
 use git2::build::RepoBuilder;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use git2::Error as Git2Error; // Assuming you're using the git2 crate
 
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, LINK};
@@ -311,4 +312,72 @@ pub fn job_response(
         true => Ok(()),
         false => Err(format!("Failed to send user decision: {}", response.status())),
     }
+}
+
+pub fn get_branch_names(repo_path: &str) -> Result<Vec<String>, git2::Error> {
+    let repo = Repository::open(repo_path)?;
+    let branches = repo.branches(None)?;
+    let mut branch_names = Vec::new();
+
+    for branch in branches {
+        let (branch, _) = branch?;
+        if let Some(name) = branch.name()?.map(String::from) {
+            branch_names.push(name);
+        }
+    }
+
+    Ok(branch_names)
+}
+
+pub fn checkout_branch(repo_path: &str, branch_name: &str) -> Result<(), git2::Error> {
+    let repo = Repository::open(repo_path)?;
+    let (object, reference) = repo.revparse_ext(branch_name)?;
+
+    repo.checkout_tree(&object, None)?;
+    if let Some(reference) = reference {
+        // If this is a branch, move HEAD to it
+        repo.set_head(reference.name().unwrap())?;
+    } else {
+        // Otherwise, detach HEAD
+        repo.set_head_detached(object.id())?;
+    }
+
+    Ok(())
+}
+
+pub fn get_current_branch(repo_path: &str) -> Result<String, git2::Error> {
+    let repo = git2::Repository::open(repo_path)?;
+    let head = repo.head()?;
+    if let Some(branch_name) = head.shorthand() {
+        Ok(branch_name.to_string())
+    } else {
+        Err(git2::Error::from_str("No current branch found."))
+    }
+}
+
+pub fn checkout_remote_branch_as_local(repo_path: &str, branch: &str) -> Result<(), Git2Error> {
+    let repo = Repository::open(repo_path)?;
+    let remote_branch_name = format!("refs/remotes/origin/{}", branch);
+    let remote_branch = repo.find_reference(&remote_branch_name)?;
+
+    // Check if the local branch already exists
+    match repo.find_branch(branch, git2::BranchType::Local) {
+        Ok(_) => {
+            // If the local branch already exists, just switch to it
+            repo.set_head(&format!("refs/heads/{}", branch))?;
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+        },
+        Err(_) => {
+            // If the local branch does not exist, create it
+            let annotated_commit = repo.reference_to_annotated_commit(&remote_branch)?;
+            let commit = repo.find_commit(annotated_commit.id())?;
+            let _local_branch = repo.branch(branch, &commit, false)?;
+
+            // Checkout the newly created local branch
+            repo.set_head(&format!("refs/heads/{}", branch))?;
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+        }
+    }
+
+    Ok(())
 }

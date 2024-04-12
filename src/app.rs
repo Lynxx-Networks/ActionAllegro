@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::helpers::{find_last_commit, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response, get_repo_scratch};
+use crate::helpers::{find_last_commit, get_current_branch, checkout_remote_branch_as_local, get_branch_names, checkout_branch, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response, get_repo_scratch};
 use egui::{ImageButton, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
 use std::fs;
 use serde_json;
@@ -164,6 +164,9 @@ pub struct TemplateApp {
     search_term: Option<String>,
     git_user: String,
     git_email: String,
+    repo_branches: Vec<String>,
+    selected_branch: String,
+
 
 
     #[serde(skip)] // This how you opt-out of serialization of a field
@@ -378,6 +381,8 @@ impl Default for TemplateApp {
             search_term: None,
             git_user: "action_allegro_user".to_string(),
             git_email: "aa@actionallregro.com".to_string(),
+            repo_branches: Vec::new(),
+            selected_branch: "None".to_string(),
 
 
             columns: vec![
@@ -1598,9 +1603,23 @@ impl eframe::App for TemplateApp {
                                                 self.info_message = Some(format!("Repository updated at: {}", repo_location));
                                                 // self.info_message = Some("Your info message".to_string());
                                                 self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
-                                                match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                                match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location.clone())) {
                                                     Ok(_) => {
                                                         println!("Repository cloned successfully.");
+                                                        if let Ok(branch_names) = get_branch_names(&repo_location) {
+                                                            self.repo_branches = branch_names;
+                                                        } else {
+                                                            self.error_message = Some("Failed to fetch branch names.".to_string());
+                                                        }
+                                                        match get_current_branch(&repo_location) {
+                                                            Ok(current_branch) => {
+                                                                self.selected_branch = current_branch;
+                                                            },
+                                                            Err(e) => {
+                                                                println!("Failed to determine the current branch: {}", e);
+                                                                self.error_message = Some(format!("Failed to determine the current branch: {}", e));
+                                                            }
+                                                        }
                                                         self.check_repo_status();
                                                         println!("repo path 2: {:?}", self.config.repo_path);
                                                     },
@@ -1664,6 +1683,20 @@ impl eframe::App for TemplateApp {
                                             println!("Repository cloned successfully.");
                                             self.info_message = Some(format!("Repository updated at: {}", repo_location));
                                             self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                            if let Ok(branch_names) = get_branch_names(&repo_location) {
+                                                self.repo_branches = branch_names;
+                                            } else {
+                                                self.error_message = Some("Failed to fetch branch names.".to_string());
+                                            }
+                                            match get_current_branch(&repo_location) {
+                                                Ok(current_branch) => {
+                                                    self.selected_branch = current_branch;
+                                                },
+                                                Err(e) => {
+                                                    println!("Failed to determine the current branch: {}", e);
+                                                    self.error_message = Some(format!("Failed to determine the current branch: {}", e));
+                                                }
+                                            }
                                             self.check_repo_status();
                                             println!("repo path 2: {:?}", self.config.repo_path);
                                         },
@@ -1700,9 +1733,24 @@ impl eframe::App for TemplateApp {
                                             self.info_message = Some(format!("Repository updated at: {}", repo_location));
                                             // self.info_message = Some("Your info message".to_string());
                                             self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
-                                            match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location)) {
+                                            match get_repo(&self.config.repo_name, &self.decrypted_github_pat, &Some(repo_location.clone())) {
                                                 Ok(_) => {
                                                     println!("Repository cloned successfully.");
+                                                    if let Ok(branch_names) = get_branch_names(&repo_location) {
+                                                        self.repo_branches = branch_names;
+                                                    } else {
+                                                        self.error_message = Some("Failed to fetch branch names.".to_string());
+                                                    }
+                                                        // Fetch the current branch name and update the selected branch
+                                                    match get_current_branch(&repo_location) {
+                                                        Ok(current_branch) => {
+                                                            self.selected_branch = current_branch;
+                                                        },
+                                                        Err(e) => {
+                                                            println!("Failed to determine the current branch: {}", e);
+                                                            self.error_message = Some(format!("Failed to determine the current branch: {}", e));
+                                                        }
+                                                    }
                                                     self.check_repo_status();
                                                     println!("repo path 2: {:?}", self.config.repo_path);
                                                 },
@@ -1764,6 +1812,40 @@ impl eframe::App for TemplateApp {
 
                                 self.show_commit_message_input = show_commit_window;
                             });
+                            ui.horizontal(|ui| {
+                                ui.label("Branch:");
+                                // Start of ComboBox for branch selection
+                                egui::ComboBox::from_label("") // Empty label for the combo box itself
+                                    .selected_text(if self.selected_branch.is_empty() { "Select a branch" } else { &self.selected_branch }) // Use self.selected_branch directly
+                                    .show_ui(ui, |ui| {
+                                        for branch in &self.repo_branches {
+                                            // Make branch selectable and update self.selected_branch when a different branch is selected
+                                            if ui.selectable_label(self.selected_branch == *branch, branch).clicked() {
+                                                self.selected_branch = branch.clone();
+
+                                                // Determine if this is a remote branch and needs special handling
+                                                if branch.starts_with("origin/") {
+                                                    // Remove the 'origin/' prefix to work with the local branch name
+                                                    let local_branch_name = branch.trim_start_matches("origin/");
+                                                    // Attempt to checkout the branch as a local branch
+                                                    match checkout_remote_branch_as_local(self.config.repo_path.as_deref().unwrap(), local_branch_name) {
+                                                        Ok(_) => println!("Checked out to branch '{}'", local_branch_name),
+                                                        Err(e) => println!("Error checking out branch '{}': {:?}", local_branch_name, e),
+                                                    }
+                                                } else {
+                                                    // Standard checkout process for a local branch
+                                                    match checkout_branch(self.config.repo_path.as_deref().unwrap(), &branch) {
+                                                        Ok(_) => println!("Checked out to branch '{}'", branch),
+                                                        Err(e) => println!("Failed to checkout branch '{}': {:?}", branch, e),
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                // End of ComboBox for branch selection
+                            });
+                            
+                            
                         });
                         ui.separator();
                         ui.vertical_centered(|ui| {

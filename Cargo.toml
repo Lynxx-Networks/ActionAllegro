@@ -6,24 +6,24 @@ edition = "2021"
 
 
 [dependencies]
-tokio = { version = "1.35.1", features = ["rt", "rt-multi-thread", "macros"] }
-git2 = "0.18.1"
-egui = "0.26.2"
-eframe = { version = "0.26.2", default-features = false, features = [
+tokio = { version = "1.37.0", features = ["rt", "rt-multi-thread", "macros"] }
+git2 = "0.18.3"
+egui = "0.27.2"
+eframe = { version = "0.27.2", default-features = false, features = [
     "accesskit",     # Make egui comptaible with screen readers. NOTE: adds a lot of dependencies.
     "default_fonts", # Embed the default egui fonts.
     "glow",          # Use the glow rendering backend. Alternative: "wgpu".
     "persistence",   # Enable restoring app state when restarting the app.
 ] }
-log = "0.4"
-rfd = "0.14.0"
+log = "0.4.21"
+rfd = "0.14.1"
 
 # You only need serde if you want app persistence:
 serde = { version = "1", features = ["derive"] }
 
-serde_json = "1.0.108"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-base64 = "0.21.5"
+serde_json = "1.0.115"
+reqwest = { version = "0.12.2", features = ["blocking", "json"] }
+base64 = "0.22"
 serde_yaml = { version = "0.9.30", features = [] }
 
 directories = "5.0.1"
@@ -35,9 +35,9 @@ cipher = { version = "0.4.4", features = ["block-padding", "alloc"] }
 pbkdf2 = "0.12.2"
 hmac = "0.12.1"
 sha2 = "0.10.8"
-walkdir = "2.4.0"
-winit = "0.29.10"
-image = "0.24.6"
+walkdir = "2.5.0"
+winit = "0.29.15"
+image = "0.25.1"
 
 
 [dev-dependencies]
