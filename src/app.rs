@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::helpers::{find_last_commit, get_current_branch, checkout_remote_branch_as_local, get_branch_names, checkout_branch, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, job_response, get_repo_scratch};
+use crate::helpers::{find_last_commit, get_current_branch, checkout_remote_branch_as_local, get_branch_names, checkout_branch, get_actions, get_repo, get_workflow_details, pull_workflow_yaml, push_repo, run_workflow, fetch_pending_jobs, get_remote_branch_names, job_response, get_repo_scratch};
 use egui::{ImageButton, TextStyle, Sense, CursorIcon, Order, LayerId, Rect, Shape, Vec2, Id, InnerResponse, Ui, epaint};
 use std::fs;
 use serde_json;
@@ -820,6 +820,17 @@ impl TemplateApp {
                     match get_workflow_details(&self.config.repo_name, &self.decrypted_github_pat, &Some(action_id)) {
                         Ok(workflow_details) => {
                             let workflow_details_str = workflow_details.to_string();
+                            self.repo_branches = get_remote_branch_names(&self.config.repo_path.clone().unwrap()).unwrap_or_default();
+                            println!("Branches: {:?}", self.repo_branches.clone());
+                            // Check if "main" or "master" exists in the branch list and default to that
+                            if self.repo_branches.contains(&"main".to_string()) {
+                                self.selected_branch = "main".to_string();
+                            } else if self.repo_branches.contains(&"master".to_string()) {
+                                self.selected_branch = "master".to_string();
+                            } else if !self.repo_branches.is_empty() {
+                                self.selected_branch = self.repo_branches[0].clone();
+                            }
+
                             println!("Fetched details for workflow: {}", workflow_details_str);
                             self.opened_workflow_details = Some(workflow_details_str.clone());
 
@@ -969,6 +980,18 @@ impl TemplateApp {
                         }
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             if let Some(inputs) = &self.active_workflow_inputs {
+                                ui.horizontal(|ui| {
+                                    ui.label("Branch to run on:");
+                                    egui::ComboBox::from_id_source("branch_selector")
+                                        .selected_text(&self.selected_branch)
+                                        .show_ui(ui, |ui| {
+                                            for branch_name in &self.repo_branches {
+                                                ui.selectable_value(&mut self.selected_branch, branch_name.clone(), branch_name);
+                                            }
+                                        });
+                                });
+                        
+
                                 for (input_name, input_details) in inputs {
                                     ui.horizontal(|ui| {
                                         ui.push_id(input_name, |ui| { // Ensure each input has a unique ID
@@ -1024,7 +1047,7 @@ impl TemplateApp {
                                 }
                                 if ui.button("Run Workflow").clicked() {
                                     let workflow_id = self.opened_action_id.unwrap(); // Make sure to handle unwrap properly
-                                    let result = run_workflow(&self.config.repo_name, &self.decrypted_github_pat, workflow_id, Some(&self.current_input_values));
+                                    let result = run_workflow(&self.config.repo_name, &self.decrypted_github_pat, workflow_id, &self.selected_branch, Some(&self.current_input_values));
                                     match result {
                                         Ok(_) => {
                                             self.info_message = Some(("Workflow triggered successfully").parse().unwrap());
