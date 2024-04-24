@@ -225,7 +225,7 @@ pub fn pull_workflow_yaml(repo_slug: &str, api_key: &str, path: &Option<String>)
     }
 }
 
-pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, inputs: Option<&HashMap<String, String>>) -> Result<(), Box<dyn Error>> {
+pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, branch: &str, inputs: Option<&HashMap<String, String>>) -> Result<(), Box<dyn Error>> {
     println!("Triggering workflow for repository: {}", repo_slug);
 
     let url = format!("https://api.github.com/repos/{}/actions/workflows/{}/dispatches", repo_slug, workflow_id);
@@ -233,7 +233,7 @@ pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, inputs: Op
 
     // Prepare the JSON body
     let mut body = json!({
-        "ref": "main" // Assuming 'main' branch, adjust as necessary
+        "ref": branch // Use the provided branch name
     });
 
     // Correctly structure the inputs within the body
@@ -246,7 +246,6 @@ pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, inputs: Op
     // Print the request body for debugging
     let request_body = serde_json::to_string_pretty(&body).unwrap_or_else(|_| "Failed to serialize request body".to_string());
     println!("Request body:\n{}", request_body);
-
 
     let response = client.post(&url)
         .header("User-Agent", "reqwest")
@@ -262,7 +261,6 @@ pub fn run_workflow(repo_slug: &str, api_key: &str, workflow_id: u64, inputs: Op
         Err(error_msg.into())
     }
 }
-
 
 pub fn fetch_pending_jobs(shared_result: Arc<Mutex<Option<Result<Vec<String>, String>>>>, api_key: String, action_listener_url: String) {
     // Existing code to perform the fetch operation...
@@ -323,6 +321,20 @@ pub fn get_branch_names(repo_path: &str) -> Result<Vec<String>, git2::Error> {
         let (branch, _) = branch?;
         if let Some(name) = branch.name()?.map(String::from) {
             branch_names.push(name);
+        }
+    }
+
+    Ok(branch_names)
+}
+
+pub fn get_remote_branch_names(repo_path: &str) -> Result<Vec<String>, git2::Error> {
+    let repo = Repository::open(repo_path)?;
+    let mut branch_names = Vec::new();
+
+    for reference in repo.references_glob("refs/remotes/*")? {
+        let reference = reference?;
+        if let Some(branch_name) = reference.name().map(|s| s.replace("refs/remotes/origin/", "")) {
+            branch_names.push(branch_name);
         }
     }
 
