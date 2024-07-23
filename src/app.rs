@@ -820,6 +820,7 @@ impl TemplateApp {
                     match get_workflow_details(&self.config.repo_name, &self.decrypted_github_pat, &Some(action_id)) {
                         Ok(workflow_details) => {
                             let workflow_details_str = workflow_details.to_string();
+                            println!("Repo Path: {:?}", self.config.repo_path.clone());
                             self.repo_branches = get_remote_branch_names(&self.config.repo_path.clone().unwrap()).unwrap_or_default();
                             println!("Branches: {:?}", self.repo_branches.clone());
                             // Check if "main" or "master" exists in the branch list and default to that

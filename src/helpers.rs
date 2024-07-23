@@ -341,6 +341,7 @@ pub fn get_remote_branch_names(repo_path: &str) -> Result<Vec<String>, git2::Err
     Ok(branch_names)
 }
 
+
 pub fn checkout_branch(repo_path: &str, branch_name: &str) -> Result<(), git2::Error> {
     let repo = Repository::open(repo_path)?;
     let (object, reference) = repo.revparse_ext(branch_name)?;
