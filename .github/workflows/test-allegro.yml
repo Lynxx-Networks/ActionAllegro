@@ -12,12 +12,12 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build the Docker test container
-      run: docker build -t madeofpendletonwool/allegro-test . -f dockerfile-test
+      run: docker build -t 3rtdevops/allegro-test . -f dockerfile-test
     - uses: rustsec/audit-check@v1.4.1
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
     - name: Run tests in the Docker container
-      run: docker run madeofpendletonwool/allegro-test
+      run: docker run 3rtdevops/allegro-test
 
   cache-checkmate:
     runs-on: ubuntu-latest
