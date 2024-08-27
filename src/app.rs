@@ -820,21 +820,33 @@ impl TemplateApp {
                     match get_workflow_details(&self.config.repo_name, &self.decrypted_github_pat, &Some(action_id)) {
                         Ok(workflow_details) => {
                             let workflow_details_str = workflow_details.to_string();
-                            println!("Repo Path: {:?}", self.config.repo_path.clone());
-                            self.repo_branches = get_remote_branch_names(&self.config.repo_path.clone().unwrap()).unwrap_or_default();
-                            println!("Branches: {:?}", self.repo_branches.clone());
-                            // Check if "main" or "master" exists in the branch list and default to that
-                            if self.repo_branches.contains(&"main".to_string()) {
-                                self.selected_branch = "main".to_string();
-                            } else if self.repo_branches.contains(&"master".to_string()) {
-                                self.selected_branch = "master".to_string();
-                            } else if !self.repo_branches.is_empty() {
-                                self.selected_branch = self.repo_branches[0].clone();
+                            match &self.config.repo_path {
+                                Some(path) => println!("Repo Path: {:?}", path.clone()),
+                                None => println!("Repo Path: temprepo"),
                             }
-
-                            println!("Fetched details for workflow: {}", workflow_details_str);
-                            self.opened_workflow_details = Some(workflow_details_str.clone());
-
+                            if let Some(repo_path) = &self.config.repo_path {
+                                println!("Repo Path: {:?}", repo_path.clone());
+                                self.repo_branches = get_remote_branch_names(repo_path).unwrap_or_default();
+                                println!("Branches: {:?}", self.repo_branches.clone());
+                            
+                                // Set default branch if "main" or "master" exists
+                                if self.repo_branches.contains(&"main".to_string()) {
+                                    self.selected_branch = "main".to_string();
+                                } else if self.repo_branches.contains(&"master".to_string()) {
+                                    self.selected_branch = "master".to_string();
+                                } else if !self.repo_branches.is_empty() {
+                                    self.selected_branch = self.repo_branches[0].clone();
+                                }
+                            
+                                println!("Fetched details for workflow: {}", workflow_details_str);
+                                self.opened_workflow_details = Some(workflow_details_str.clone());
+                            
+                                // Further processing
+                            } else {
+                                self.error_message = Some("Repository path is not set - Go to pull and upload tab and pull the repo".to_string());
+                                self.message_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs());
+                                return;
+                            }
                             // Parse the JSON to get the workflow file path
                             if let Some(ref details_str) = self.opened_workflow_details {
                                 match serde_json::from_str::<JsonValue>(details_str) {
