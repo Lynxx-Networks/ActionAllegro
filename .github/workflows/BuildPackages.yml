@@ -38,7 +38,7 @@ jobs:
           cargo build --release
 
       - name: Archive builds
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}-build
           path: target/release/${{ env.ARTIFACT_NAME }}
@@ -51,17 +51,17 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: ubuntu-latest-build
           path: artifacts/ubuntu-latest
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: macOS-latest-build
           path: artifacts/macOS-latest
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: windows-latest-build
           path: artifacts/windows-latest
